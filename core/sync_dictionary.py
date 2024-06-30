@@ -50,7 +50,7 @@ class Dictionary:
 
 
 def main():
-    with open("dictionary.txt", encoding="utf8") as f:
+    with open("../dictionary.txt", encoding="utf8") as f:
         dictionary = Dictionary(json.load(f))
     heaven = dictionary.themes[25]
     for i, word in enumerate(sorted(heaven.words)):
