@@ -1,0 +1,20 @@
+{
+  "name": "LeafTheme",
+  "description": "WordTheme Dictionary Shuffler",
+  "image": "heroku/python",
+  "repository": "https://github.com/goblinqueen/leaftheme",
+  "keywords": ["python", "django"],
+  "env": {
+    "DJANGO_SECRET_KEY": {
+      "description": "The secret key for the Django application.",
+      "generator": "secret"
+    }
+  },
+  "environments": {
+    "test": {
+      "scripts": {
+        "test": "./manage.py test --debug-mode"
+      }
+    }
+  }
+}
