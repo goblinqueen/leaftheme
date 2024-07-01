@@ -1,4 +1,6 @@
 /dictionary.txt
-/credentials.json
+/dictionary/credentials.json
 .idea
 /core/credentials.json
+/dictionary/credentials.json
+/venv/

@@ -14,10 +14,10 @@ from googleapiclient.http import MediaIoBaseDownload
 from dictionary.sync_dictionary import Dictionary
 
 SCOPES = ['https://www.googleapis.com/auth/drive.file',
-    'https://www.googleapis.com/auth/drive',
-    'https://www.googleapis.com/auth/drive.file',
-    'https://www.googleapis.com/auth/drive.metadata'
-  ]
+          'https://www.googleapis.com/auth/drive',
+          'https://www.googleapis.com/auth/drive.file',
+          'https://www.googleapis.com/auth/drive.metadata'
+          ]
 
 
 def main():
@@ -75,9 +75,9 @@ def main():
         dict_file_id = None
         for item in items:
             search = "mimeType = 'application/zip' " \
-                      "and name contains '.wt' " \
-                      "and '{}' in parents " \
-                      "and trashed=false".format(item['id'])
+                     "and name contains '.wt' " \
+                     "and '{}' in parents " \
+                     "and trashed=false".format(item['id'])
             results = (
                 service.files().list(q=search, fields=fields).execute()
             )
@@ -100,10 +100,13 @@ def main():
         dict = Dictionary(json.loads(input_zip.read('dictionary.txt')))
         print(dict.themes)
         heaven = dict.themes[31]
+        out = []
         for i, word in enumerate(sorted(heaven.words)):
             if i > 30:
                 break
             print(word)
+            out.append(str(word))
+        return "<br />".join(out)
 
     except HttpError as error:
         print(f"An error occurred: {error}")
@@ -111,4 +114,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
