@@ -11,7 +11,7 @@ from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaIoBaseDownload
 
 # If modifying these scopes, delete the file token.json.
-from dictionary.sync_dictionary import Dictionary
+from sync_dictionary import Dictionary
 
 SCOPES = ['https://www.googleapis.com/auth/drive.file',
     'https://www.googleapis.com/auth/drive',
@@ -49,18 +49,8 @@ def main():
     try:
         service = build("drive", "v3", credentials=creds)
 
-        # Call the Drive v3 API
         search = "mimeType = 'application/vnd.google-apps.folder' " \
                  "and name = 'WordTheme' and 'root' in parents and trashed=false"
-        # search = "mimeType = 'application/vnd.google-apps.folder' " \
-        #          "and name = 'WordTheme' " \
-        #          "and 'root' in parents " \
-        #          "and trashed=false"
-        #
-        # search = "mimeType = 'application/vnd.google-apps.folder' " \
-        #          "and name contains '.wt' " \
-        #          "and 'WordTheme' in parents " \
-        #          "and trashed=false"
 
         fields = 'files(id, name, mimeType, modifiedTime)'
 
