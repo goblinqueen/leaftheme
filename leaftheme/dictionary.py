@@ -52,8 +52,9 @@ class Dictionary:
 def main():
     with open("../dictionary.txt", encoding="utf8") as f:
         dictionary = Dictionary(json.load(f))
-    heaven = dictionary.themes[25]
-    for i, word in enumerate(sorted(heaven.words)):
+    theme = next(iter(dictionary.themes.values()))
+    print("Least known 30 words from theme {}:\n".format(theme.name))
+    for i, word in enumerate(sorted(theme.words)):
         if i > 30:
             break
         print(word)
