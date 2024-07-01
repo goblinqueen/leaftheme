@@ -14,6 +14,8 @@ import googleapiclient.http
 from googleapiclient.discovery import build
 from . import dictionary
 
+PROJECT_ID = "goblin-queendom"
+
 DICTIONARY_FILE = 'dictionary.txt'
 
 SCOPES = ['https://www.googleapis.com/auth/drive.metadata.readonly',
@@ -161,17 +163,11 @@ def oauth2callback():
         {
             "web": {
                 "client_id": os.environ['G_CLIENT_ID'],
-                "project_id": "goblin-queendom",
+                "project_id": PROJECT_ID,
                 "auth_uri": "https://accounts.google.com/o/oauth2/auth",
                 "token_uri": "https://oauth2.googleapis.com/token",
                 "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
-                "client_secret": os.environ['G_CLIENT_SECRET'],
-                "redirect_uris": [
-                    "https://leaftheme-df31c6a9a848.herokuapp.com/oauth"
-                ],
-                "javascript_origins": [
-                    "https://leaftheme-df31c6a9a848.herokuapp.com"
-                ]
+                "client_secret": os.environ['G_CLIENT_SECRET']
             }
         }, scopes=SCOPES, state=state)
     flow.redirect_uri = flask.url_for('oauth2callback', _external=True)
