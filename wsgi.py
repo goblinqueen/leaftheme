@@ -1,5 +1,5 @@
-from leaftheme.main import leaftheme
+from leaftheme.main import app
 
 
 if __name__ == "__main__":
-    leaftheme.run(port=8080, debug=True)
+    app.run(port=8080, debug=True)
