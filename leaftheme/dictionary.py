@@ -18,6 +18,9 @@ class Dictionary:
         def add_word(self, word):
             self.words.append(word)
 
+        def word_count(self):
+            return len(self.words)
+
     class Word:
         def __init__(self, value):
             self.id = value['id']

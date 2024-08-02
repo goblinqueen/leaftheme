@@ -1,0 +1,11 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<p>
+<ul>
+{% for x in themes %}
+    <li> {{ x.id }} | {{ x.word_count() }} | {{ x.name }} | <a href='/words/{{ x.id }}'>30 worst words</a> </li>
+{% endfor %}
+</ul>
+</p>
+{% endblock %}

@@ -34,7 +34,7 @@ app.secret_key = os.environ['SECRET_KEY']
 
 @app.route('/')
 def index():
-    return print_index_table()
+    return flask.render_template('index.html', menu_items=get_menu_items())
 
 
 @app.route('/load_dictionary')
@@ -86,8 +86,7 @@ def load_dictionary():
     with zipfile.ZipFile(file_name, 'r') as zip_file:
         zip_file.extract(DICTIONARY_FILE, '.')
 
-    return ('Dictionary loaded<br><br>' +
-            print_index_table())
+    return flask.render_template('loaded.html', menu_items=get_menu_items())
 
 
 @app.route('/themes')
@@ -97,9 +96,8 @@ def get_themes():
 
     with open(DICTIONARY_FILE, encoding="utf8") as f:
         wt_dict = dictionary.Dictionary(json.load(f))
-    return "<br />".join(
-        [f"{x.id} | {x.name} | {len(x.words)} | <a href='/words/{x.id}'>30 worst words</a>" for x in wt_dict.themes.values()]
-    )
+    return flask.render_template('themes.html', menu_items=get_menu_items(),
+                                 themes=wt_dict.themes.values())
 
 
 @app.route('/words/<theme_id>')
@@ -116,7 +114,8 @@ def get_words(theme_id):
         if i > 30:
             break
         out.append(str(word))
-    return "<br />".join(out)
+    return flask.render_template('words.html',
+                                 menu_items=get_menu_items(), words=out, theme=theme)
 
 
 
@@ -188,8 +187,7 @@ def clear_credentials():
         del flask.session['credentials']
     if os.path.exists(DICTIONARY_FILE):
         os.remove(DICTIONARY_FILE)
-    return ('Bye.<br><br>' +
-            print_index_table())
+    return flask.render_template('index.html', menu_items=get_menu_items())
 
 
 def credentials_to_dict(credentials):
@@ -201,14 +199,12 @@ def credentials_to_dict(credentials):
             'scopes': credentials.scopes}
 
 
-def print_index_table():
-
-    out = ""
+def get_menu_items():
+    out = []
     if os.path.exists(DICTIONARY_FILE):
-        out += '[dictionary] <a href="/load_dictionary">Update</a><br />'
-        out += '[dictionary] <a href="/themes">Themes</a><br />'
+        out.append(("Update Dictionary", "/load_dictionary"))
+        out.append(('Themes', "/themes"))
     else:
-        out += '<a href="/load_dictionary">Load dictionary</a><br />'
-    out += '<a href="/clear">Logout</a>'
-
+        out.append(("Load Dictionary", "/load_dictionary"))
+    out.append(("Logout", "/clear"))
     return out
