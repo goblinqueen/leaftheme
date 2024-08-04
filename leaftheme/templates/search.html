@@ -1,0 +1,19 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<p>
+   <form action ="/search">
+   <label for="query"></label>
+   <input type="text" id="query" name="query"> <input type="submit" value="Search">
+</form>
+
+</p>
+<h2 class="mt-4">{{ query }}</h2>
+<p>
+    <ul>
+    {% for res in results %}
+    <li>{{ res[1] }} — {{ res[1].translation }} <sup>{{ res[3] }}</sup> <br /></li>
+    {% endfor %}
+    </ul>
+</p>
+{% endblock %}

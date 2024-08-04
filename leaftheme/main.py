@@ -110,12 +110,32 @@ def get_words(theme_id):
 
     theme = wt_dict.themes[int(theme_id)]
     out = []
-    for i, word in enumerate(sorted(theme.words)):
+    for i, word in enumerate(sorted(theme.words.values())):
         if i > 30:
             break
         out.append(str(word))
     return flask.render_template('words.html',
                                  menu_items=get_menu_items(), words=out, theme=theme)
+
+
+@app.route('/search')
+def search():
+    if not os.path.exists(DICTIONARY_FILE):
+        return flask.redirect('load_dictionary')
+
+    query = ""
+    results = []
+
+    if 'query' in flask.request.args:
+        query = flask.request.args.get('query')
+
+        with open(DICTIONARY_FILE, encoding="utf8") as f:
+            wt_dict = dictionary.Dictionary(json.load(f))
+
+        results = wt_dict.search(query)
+
+    return flask.render_template('search.html',
+                                 menu_items=get_menu_items(), query=query, results=results)
 
 
 
@@ -204,6 +224,7 @@ def get_menu_items():
     if os.path.exists(DICTIONARY_FILE):
         out.append(("Update Dictionary", "/load_dictionary"))
         out.append(('Themes', "/themes"))
+        out.append(('Search', "/search"))
     else:
         out.append(("Load Dictionary", "/load_dictionary"))
     out.append(("Logout", "/clear"))
