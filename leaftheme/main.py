@@ -6,6 +6,7 @@ import zipfile
 import flask
 
 import google.oauth2.credentials
+from google.auth.exceptions import RefreshError
 import google_auth_oauthlib.flow
 import googleapiclient.discovery
 import googleapiclient.http
@@ -40,18 +41,20 @@ def load_dictionary():
     if 'credentials' not in flask.session:
         return flask.redirect('authorize')
 
-    # Load credentials from the session.
-    credentials = google.oauth2.credentials.Credentials(
-        **flask.session['credentials'])
+    try:
+        credentials = google.oauth2.credentials.Credentials(
+            **flask.session['credentials'])
+    except RefreshError:
+        return flask.redirect('authorize')
 
     drive = build(API_SERVICE_NAME, API_VERSION, credentials=credentials)
 
-    search = ("mimeType = 'application/vnd.google-apps.folder' " +
-              "and name = 'WordTheme' and 'root' in parents and trashed=false")
+    query = ("mimeType = 'application/vnd.google-apps.folder' " +
+             "and name = 'WordTheme' and 'root' in parents and trashed=false")
 
     fields = 'files(id, name, mimeType, modifiedTime)'
 
-    wt_folders = drive.files().list(q=search, fields=fields).execute()
+    wt_folders = drive.files().list(q=query, fields=fields).execute()
     wt_folders = wt_folders.get("files", [])
 
     if not wt_folders:
@@ -60,12 +63,12 @@ def load_dictionary():
     dict_file = None
 
     for item in wt_folders:
-        search = "mimeType = 'application/zip' " \
+        query = "mimeType = 'application/zip' " \
                  "and name contains '.wt' " \
                  "and '{}' in parents " \
                  "and trashed=false".format(item['id'])
         results = (
-            drive.files().list(q=search, fields=fields).execute()
+            drive.files().list(q=query, fields=fields).execute()
         )
         child_items = results.get("files", [])
         for child_item in child_items:
