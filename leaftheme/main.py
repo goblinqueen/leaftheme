@@ -224,7 +224,7 @@ def clear_credentials():
                     os.remove(os.path.join(root, name))
                 for name in dirs:
                     os.rmdir(os.path.join(root, name))
-        os.removedirs(flask.session['file_name'])
+            os.removedirs(flask.session['file_name'])
         del flask.session['file_name']
     return flask.render_template('index.html', menu_items=get_menu_items())
 
