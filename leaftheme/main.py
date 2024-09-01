@@ -1,11 +1,9 @@
 import io
 import json
 import os
-import uuid
 import zipfile
 
 import flask
-import requests
 
 import google.oauth2.credentials
 import google_auth_oauthlib.flow
@@ -16,7 +14,7 @@ from . import dictionary
 
 PROJECT_ID = "goblin-queendom"
 
-DICTIONARY_FILE = 'dictionary.txt'
+DICTIONARY_FILE_NAME = 'dictionary.txt'
 
 SCOPES = ['https://www.googleapis.com/auth/drive.metadata.readonly',
           'https://www.googleapis.com/auth/drive.file',
@@ -80,21 +78,23 @@ def load_dictionary():
     done = False
     while done is False:
         status, done = downloader.next_chunk()
-    file_name = 'dictionary.zip'
+    file_name = f'{flask.session['file_name']}/dictionary.zip'
     with open(file_name, 'wb') as f:
         f.write(file.getvalue())
     with zipfile.ZipFile(file_name, 'r') as zip_file:
-        zip_file.extract(DICTIONARY_FILE, '.')
+        zip_file.extract(DICTIONARY_FILE_NAME, flask.session['file_name'])
 
     return flask.render_template('loaded.html', menu_items=get_menu_items())
 
 
 @app.route('/themes')
 def get_themes():
-    if not os.path.exists(DICTIONARY_FILE):
+    file_name = flask.session.get('file_name', '_none_') + '/' + DICTIONARY_FILE_NAME
+
+    if not os.path.exists(file_name):
         return flask.redirect('load_dictionary')
 
-    with open(DICTIONARY_FILE, encoding="utf8") as f:
+    with open(file_name, encoding="utf8") as f:
         wt_dict = dictionary.Dictionary(json.load(f))
     return flask.render_template('themes.html', menu_items=get_menu_items(),
                                  themes=wt_dict.themes.values())
@@ -102,10 +102,12 @@ def get_themes():
 
 @app.route('/words/<theme_id>')
 def get_words(theme_id):
-    if not os.path.exists(DICTIONARY_FILE):
+    file_name = flask.session.get('file_name', '_none_') + '/' + DICTIONARY_FILE_NAME
+
+    if not os.path.exists(file_name):
         return flask.redirect('load_dictionary')
 
-    with open(DICTIONARY_FILE, encoding="utf8") as f:
+    with open(file_name, encoding="utf8") as f:
         wt_dict = dictionary.Dictionary(json.load(f))
 
     theme = wt_dict.themes[int(theme_id)]
@@ -120,7 +122,8 @@ def get_words(theme_id):
 
 @app.route('/search')
 def search():
-    if not os.path.exists(DICTIONARY_FILE):
+    file_name = flask.session.get('file_name', '_none_') + '/' + DICTIONARY_FILE_NAME
+    if not os.path.exists(file_name):
         return flask.redirect('load_dictionary')
 
     query = ""
@@ -129,7 +132,7 @@ def search():
     if 'query' in flask.request.args:
         query = flask.request.args.get('query')
 
-        with open(DICTIONARY_FILE, encoding="utf8") as f:
+        with open(file_name, encoding="utf8") as f:
             wt_dict = dictionary.Dictionary(json.load(f))
 
         results = wt_dict.search(query)
@@ -141,6 +144,13 @@ def search():
 
 @app.route('/authorize')
 def authorize():
+
+    import uuid
+    file_name = str(uuid.uuid4())
+    if not os.path.exists(file_name):
+        os.makedirs(file_name)
+    flask.session['file_name'] = file_name
+
     flow = google_auth_oauthlib.flow.Flow.from_client_config(
         {
             "web": {
@@ -192,7 +202,6 @@ def oauth2callback():
     flow.redirect_uri = flask.url_for('oauth2callback', _external=True)
 
     authorization_response = flask.request.url
-    print(authorization_response)
     flow.fetch_token(authorization_response=authorization_response)
 
     credentials = flow.credentials
@@ -205,8 +214,15 @@ def oauth2callback():
 def clear_credentials():
     if 'credentials' in flask.session:
         del flask.session['credentials']
-    if os.path.exists(DICTIONARY_FILE):
-        os.remove(DICTIONARY_FILE)
+    if 'file_name' in flask.session:
+        if os.path.exists(flask.session['file_name']):
+            for root, dirs, files in os.walk(flask.session['file_name'], topdown=False):
+                for name in files:
+                    os.remove(os.path.join(root, name))
+                for name in dirs:
+                    os.rmdir(os.path.join(root, name))
+        os.removedirs(flask.session['file_name'])
+        del flask.session['file_name']
     return flask.render_template('index.html', menu_items=get_menu_items())
 
 
@@ -220,8 +236,9 @@ def credentials_to_dict(credentials):
 
 
 def get_menu_items():
+    file_name = flask.session.get('file_name', '_none_') + '/' + DICTIONARY_FILE_NAME
     out = []
-    if os.path.exists(DICTIONARY_FILE):
+    if 'file_name' in flask.session and os.path.exists(file_name):
         out.append(("Update Dictionary", "/load_dictionary"))
         out.append(('Themes', "/themes"))
         out.append(('Search', "/search"))
