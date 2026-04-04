@@ -126,6 +126,32 @@ def get_words(theme_id):
                                  menu_items=get_menu_items(), words=out, theme=theme)
 
 
+@app.route('/add_word', methods=['GET', 'POST'])
+def add_word():
+    file_name = flask.session.get('file_name', '_none_') + '/' + DICTIONARY_FILE_NAME
+
+    if not os.path.exists(file_name):
+        return flask.redirect('load_dictionary')
+
+    with open(file_name, encoding="utf8") as f:
+        wt_dict = dictionary.Dictionary(json.load(f))
+
+    if flask.request.method == 'POST':
+        theme_id = int(flask.request.form['theme_id'])
+        word_str = flask.request.form['word'].strip()
+        translation = flask.request.form['translation'].strip()
+        wt_dict.add_word(theme_id, word_str, translation)
+        with open(file_name, 'w', encoding='utf8') as f:
+            json.dump(wt_dict.to_dict(), f, ensure_ascii=False, separators=(',', ':'))
+        return flask.redirect(flask.url_for('get_words', theme_id=theme_id))
+
+    preselected = flask.request.args.get('theme_id', type=int)
+    return flask.render_template('add_word.html',
+                                 menu_items=get_menu_items(),
+                                 themes=wt_dict.themes.values(),
+                                 preselected=preselected)
+
+
 @app.route('/word/<word_id>')
 def get_word(word_id):
     file_name = flask.session.get('file_name', '_none_') + '/' + DICTIONARY_FILE_NAME
@@ -163,6 +189,78 @@ def search():
                                  menu_items=get_menu_items(), query=query, results=results)
 
 
+def _load_words_json(word_ids_str):
+    """Load dictionary and return (words_json_str, error_response_or_None)."""
+    file_name = flask.session.get('file_name', '_none_') + '/' + DICTIONARY_FILE_NAME
+    if not os.path.exists(file_name):
+        return None, flask.redirect('load_dictionary')
+    with open(file_name, encoding="utf8") as f:
+        wt_dict = dictionary.Dictionary(json.load(f))
+    ids = [int(x) for x in word_ids_str.split(',') if x.strip()]
+    words_list = []
+    for wid in ids:
+        if wid in wt_dict.words:
+            w = wt_dict.words[wid]
+            words_list.append({'id': w.id, 'word': w.word, 'translation': w.translation})
+    if not words_list:
+        return None, ('No valid word IDs', 400)
+    return json.dumps(words_list, ensure_ascii=False), None
+
+
+@app.route('/test/flashcard')
+def test_flashcard():
+    word_ids_str = flask.request.args.get('word_ids', '')
+    return_url = flask.request.args.get('return_url', '/themes')
+    words_json, err = _load_words_json(word_ids_str)
+    if err:
+        return err
+    return flask.render_template('test_flashcard.html',
+                                 menu_items=get_menu_items(),
+                                 words_json=words_json, return_url=return_url)
+
+
+@app.route('/test/typein')
+def test_typein():
+    word_ids_str = flask.request.args.get('word_ids', '')
+    return_url = flask.request.args.get('return_url', '/themes')
+    words_json, err = _load_words_json(word_ids_str)
+    if err:
+        return err
+    return flask.render_template('test_typein.html',
+                                 menu_items=get_menu_items(),
+                                 words_json=words_json, return_url=return_url)
+
+
+@app.route('/test/check_answer', methods=['POST'])
+def test_check_answer():
+    from rapidfuzz import fuzz
+    data = flask.request.get_json()
+    word_id = int(data['word_id'])
+    answer = data['answer'].strip()
+
+    file_name = flask.session.get('file_name', '_none_') + '/' + DICTIONARY_FILE_NAME
+    with open(file_name, encoding="utf8") as f:
+        wt_dict = dictionary.Dictionary(json.load(f))
+
+    correct = wt_dict.words[word_id].word  # Finnish word is the expected answer
+    # Length guard: reject if answer length is too far from correct length
+    len_ratio = len(answer) / max(len(correct), 1)
+    if len_ratio < 0.5 or len_ratio > 1.5:
+        return flask.jsonify(matched=False, correct_answer=correct)
+
+    score = fuzz.ratio(answer.lower(), correct.lower())
+    matched = score >= 75
+    return flask.jsonify(matched=matched, correct_answer=correct)
+
+
+@app.route('/test/results', methods=['POST'])
+def test_results():
+    data = flask.request.get_json()
+    return_url = data.get('return_url', '/themes')
+    # Results stored in data['results'] as {word_id: rating}
+    # Score updates will be added when assessment/review flows are built
+    return flask.jsonify(status='ok', redirect=return_url)
+
 
 @app.route('/save_dictionary')
 def save_dictionary():
@@ -175,6 +273,10 @@ def save_dictionary():
     if not os.path.exists(file_name):
         return flask.redirect('load_dictionary')
 
+    file_name = flask.session.get('file_name', '_none_') + '/' + DICTIONARY_FILE_NAME
+    with open(file_name, encoding="utf8") as f:
+        wt_dict = dictionary.Dictionary(json.load(f))
+
     try:
         save_dictionary_to_drive(
             flask.session['credentials'],
@@ -183,7 +285,12 @@ def save_dictionary():
         )
     except RefreshError:
         return flask.redirect('authorize')
-    return flask.render_template('loaded.html', menu_items=get_menu_items())
+
+    word_count = sum(t.word_count() for t in wt_dict.themes.values())
+    theme_count = len(wt_dict.themes)
+    return flask.render_template('saved.html', menu_items=get_menu_items(),
+                                 word_count=word_count, theme_count=theme_count,
+                                 title=wt_dict.title)
 
 
 @app.route('/authorize')
@@ -368,6 +475,7 @@ def get_menu_items():
         out.append(("Save to Drive", "/save_dictionary"))
         out.append(('Themes', "/themes"))
         out.append(('Search', "/search"))
+        out.append(('Add Word', "/add_word"))
     else:
         out.append(("Load Dictionary", "/load_dictionary"))
     out.append(("Logout", "/clear"))

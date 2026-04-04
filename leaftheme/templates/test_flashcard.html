@@ -1,0 +1,100 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<div class="mt-4 mb-3">
+    <small id="progress-text" class="text-muted"></small>
+    <div class="progress mt-1" style="height: 6px;">
+        <div id="progress-bar" class="progress-bar" role="progressbar" style="width: 0%"></div>
+    </div>
+</div>
+
+<div class="card mx-auto mt-4" style="max-width: 500px;">
+    <div class="card-body text-center py-5">
+        <h2 id="word-display" class="card-title mb-4"></h2>
+        <p id="translation-display" class="fs-4 text-muted d-none"></p>
+
+        <div id="initial-buttons" class="mt-4">
+            <button id="btn-reveal" class="btn btn-primary me-2">Reveal</button>
+            <button id="btn-dont-know" class="btn btn-outline-danger">Don't Know</button>
+        </div>
+
+        {% include '_rating_buttons.html' %}
+    </div>
+</div>
+
+<script id="words-data" type="application/json">{{ words_json | safe }}</script>
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+    const words = JSON.parse(document.getElementById('words-data').textContent);
+    const returnUrl = {{ return_url | tojson }};
+    let currentIndex = 0;
+    const results = {};
+
+    const wordDisplay = document.getElementById('word-display');
+    const translationDisplay = document.getElementById('translation-display');
+    const revealBtn = document.getElementById('btn-reveal');
+    const dontKnowBtn = document.getElementById('btn-dont-know');
+    const ratingButtons = document.getElementById('rating-buttons');
+    const initialButtons = document.getElementById('initial-buttons');
+    const progressBar = document.getElementById('progress-bar');
+    const progressText = document.getElementById('progress-text');
+
+    function showWord() {
+        const w = words[currentIndex];
+        wordDisplay.textContent = w.word;
+        translationDisplay.textContent = '';
+        translationDisplay.classList.add('d-none');
+        ratingButtons.classList.add('d-none');
+        initialButtons.classList.remove('d-none');
+        updateProgress();
+    }
+
+    function updateProgress() {
+        const pct = (currentIndex + 1) / words.length * 100;
+        progressBar.style.width = pct + '%';
+        progressText.textContent = (currentIndex + 1) + ' / ' + words.length;
+    }
+
+    function reveal() {
+        translationDisplay.textContent = words[currentIndex].translation;
+        translationDisplay.classList.remove('d-none');
+        initialButtons.classList.add('d-none');
+        ratingButtons.classList.remove('d-none');
+    }
+
+    function recordAndAdvance(rating) {
+        results[words[currentIndex].id] = rating;
+        currentIndex++;
+        if (currentIndex < words.length) {
+            showWord();
+        } else {
+            submitResults();
+        }
+    }
+
+    revealBtn.addEventListener('click', reveal);
+
+    dontKnowBtn.addEventListener('click', () => {
+        recordAndAdvance(0);
+    });
+
+    ratingButtons.querySelectorAll('.btn-rating').forEach(btn => {
+        btn.addEventListener('click', () => {
+            recordAndAdvance(parseInt(btn.dataset.rating));
+        });
+    });
+
+    function submitResults() {
+        fetch('/test/results', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({results: results, return_url: returnUrl})
+        })
+        .then(r => r.json())
+        .then(data => { window.location.href = data.redirect; });
+    }
+
+    showWord();
+});
+</script>
+{% endblock %}

@@ -1,0 +1,140 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<div class="mt-4 mb-3">
+    <small id="progress-text" class="text-muted"></small>
+    <div class="progress mt-1" style="height: 6px;">
+        <div id="progress-bar" class="progress-bar" role="progressbar" style="width: 0%"></div>
+    </div>
+</div>
+
+<div class="card mx-auto mt-4" style="max-width: 500px;">
+    <div class="card-body text-center py-5">
+        <h2 id="word-display" class="card-title mb-4"></h2>
+
+        <div id="input-area">
+            <div class="input-group mb-3" style="max-width: 350px; margin: 0 auto;">
+                <input type="text" id="answer-input" class="form-control" placeholder="Finnish word..." autofocus>
+                <button id="btn-check" class="btn btn-primary">Check</button>
+            </div>
+            <button id="btn-dont-know" class="btn btn-outline-danger btn-sm">Don't Know</button>
+        </div>
+
+        <div id="feedback-area" class="d-none mt-3">
+            <p id="feedback-text"></p>
+        </div>
+
+        {% include '_rating_buttons.html' %}
+    </div>
+</div>
+
+<script id="words-data" type="application/json">{{ words_json | safe }}</script>
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+    const words = JSON.parse(document.getElementById('words-data').textContent);
+    const returnUrl = {{ return_url | tojson }};
+    let currentIndex = 0;
+    const results = {};
+
+    const wordDisplay = document.getElementById('word-display');
+    const answerInput = document.getElementById('answer-input');
+    const checkBtn = document.getElementById('btn-check');
+    const dontKnowBtn = document.getElementById('btn-dont-know');
+    const inputArea = document.getElementById('input-area');
+    const feedbackArea = document.getElementById('feedback-area');
+    const feedbackText = document.getElementById('feedback-text');
+    const ratingButtons = document.getElementById('rating-buttons');
+    const progressBar = document.getElementById('progress-bar');
+    const progressText = document.getElementById('progress-text');
+
+    function showWord() {
+        const w = words[currentIndex];
+        wordDisplay.textContent = w.translation;
+        answerInput.value = '';
+        answerInput.disabled = false;
+        inputArea.classList.remove('d-none');
+        feedbackArea.classList.add('d-none');
+        ratingButtons.classList.add('d-none');
+        updateProgress();
+        answerInput.focus();
+    }
+
+    function updateProgress() {
+        const pct = (currentIndex + 1) / words.length * 100;
+        progressBar.style.width = pct + '%';
+        progressText.textContent = (currentIndex + 1) + ' / ' + words.length;
+    }
+
+    function recordAndAdvance(rating) {
+        results[words[currentIndex].id] = rating;
+        currentIndex++;
+        if (currentIndex < words.length) {
+            showWord();
+        } else {
+            submitResults();
+        }
+    }
+
+    function checkAnswer() {
+        const answer = answerInput.value.trim();
+        if (!answer) return;
+
+        answerInput.disabled = true;
+        checkBtn.disabled = true;
+
+        fetch('/test/check_answer', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                word_id: words[currentIndex].id,
+                answer: answer
+            })
+        })
+        .then(r => r.json())
+        .then(data => {
+            inputArea.classList.add('d-none');
+
+            if (data.matched) {
+                feedbackText.innerHTML =
+                    '<span class="text-success">Your answer:</span> ' + answer +
+                    '<br><span class="text-muted">Correct:</span> ' + data.correct_answer;
+                feedbackArea.classList.remove('d-none');
+                ratingButtons.classList.remove('d-none');
+            } else {
+                // Not matched — return 0, no reveal
+                recordAndAdvance(0);
+                return;
+            }
+        });
+    }
+
+    checkBtn.addEventListener('click', checkAnswer);
+
+    answerInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') checkAnswer();
+    });
+
+    dontKnowBtn.addEventListener('click', () => {
+        recordAndAdvance(0);
+    });
+
+    ratingButtons.querySelectorAll('.btn-rating').forEach(btn => {
+        btn.addEventListener('click', () => {
+            recordAndAdvance(parseInt(btn.dataset.rating));
+        });
+    });
+
+    function submitResults() {
+        fetch('/test/results', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({results: results, return_url: returnUrl})
+        })
+        .then(r => r.json())
+        .then(data => { window.location.href = data.redirect; });
+    }
+
+    showWord();
+});
+</script>
+{% endblock %}
