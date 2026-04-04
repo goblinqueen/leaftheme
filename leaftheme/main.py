@@ -183,6 +183,7 @@ def authorize():
         include_granted_scopes='true')
 
     flask.session['state'] = state
+    flask.session['code_verifier'] = flow.code_verifier
 
     return flask.redirect(authorization_url)
 
@@ -205,7 +206,8 @@ def oauth2callback():
     flow.redirect_uri = flask.url_for('oauth2callback', _external=True)
 
     authorization_response = flask.request.url
-    flow.fetch_token(authorization_response=authorization_response)
+    flow.fetch_token(authorization_response=authorization_response,
+                     code_verifier=flask.session['code_verifier'])
 
     credentials = flow.credentials
     flask.session['credentials'] = credentials_to_dict(credentials)
