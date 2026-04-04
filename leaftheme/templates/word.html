@@ -1,0 +1,57 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<h2 class="mt-4">{{ word.word }}</h2>
+<p class="fs-4 text-muted">{{ word.translation }}</p>
+
+<table class="table table-borderless w-auto mt-3">
+    <tbody>
+        {% if theme %}
+        <tr>
+            <th scope="row">Theme</th>
+            <td><a href="/words/{{ theme.id }}">{{ theme.name }}</a></td>
+        </tr>
+        {% endif %}
+        <tr>
+            <th scope="row">Score</th>
+            <td>{{ word.score }}</td>
+        </tr>
+        {% if word.correct_answers is not none %}
+        <tr>
+            <th scope="row">Correct answers</th>
+            <td>{{ word.correct_answers }}</td>
+        </tr>
+        {% endif %}
+        {% if word.review_interval is not none %}
+        <tr>
+            <th scope="row">Review interval</th>
+            <td>{{ word.review_interval }}</td>
+        </tr>
+        {% endif %}
+        {% if word.review_date is not none %}
+        <tr>
+            <th scope="row">Next review</th>
+            <td>{{ word.review_date }}</td>
+        </tr>
+        {% endif %}
+        {% if word.grammar_context %}
+        <tr>
+            <th scope="row">Grammar</th>
+            <td>{{ word.grammar_context }}</td>
+        </tr>
+        {% endif %}
+        <tr>
+            <th scope="row">Created</th>
+            <td>{{ word.created_date }}</td>
+        </tr>
+        <tr>
+            <th scope="row">Modified</th>
+            <td>{{ word.modified_date }}</td>
+        </tr>
+        <tr>
+            <th scope="row">ID</th>
+            <td>{{ word.id }}</td>
+        </tr>
+    </tbody>
+</table>
+{% endblock %}

@@ -121,9 +121,25 @@ def get_words(theme_id):
     for i, word in enumerate(sorted(theme.words.values())):
         if i > 30:
             break
-        out.append(str(word))
+        out.append(word)
     return flask.render_template('words.html',
                                  menu_items=get_menu_items(), words=out, theme=theme)
+
+
+@app.route('/word/<word_id>')
+def get_word(word_id):
+    file_name = flask.session.get('file_name', '_none_') + '/' + DICTIONARY_FILE_NAME
+
+    if not os.path.exists(file_name):
+        return flask.redirect('load_dictionary')
+
+    with open(file_name, encoding="utf8") as f:
+        wt_dict = dictionary.Dictionary(json.load(f))
+
+    word = wt_dict.words[int(word_id)]
+    theme = wt_dict.themes[word.theme] if word.theme is not None else None
+    return flask.render_template('word.html',
+                                 menu_items=get_menu_items(), word=word, theme=theme)
 
 
 @app.route('/search')

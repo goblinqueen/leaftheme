@@ -12,7 +12,7 @@
 <p>
     <ul>
     {% for res in results %}
-    <li>{{ res[1] }} — {{ res[1].translation }} <sup>{{ res[3] }}</sup> <br /></li>
+    <li><a href="/word/{{ res[1].id }}">{{ res[1] }}</a> — {{ res[1].translation }} <sup><a href="/words/{{ res[2] }}">{{ res[3] }}</a></sup> <br /></li>
     {% endfor %}
     </ul>
 </p>
