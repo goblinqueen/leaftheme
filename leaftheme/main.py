@@ -1,6 +1,7 @@
 import io
 import json
 import os
+import struct
 import zipfile
 
 import flask
@@ -75,6 +76,8 @@ def load_dictionary():
             if not dict_file or child_item['modifiedTime'] > dict_file['modifiedTime']:
                 dict_file = child_item
 
+    flask.session['dict_file_id'] = dict_file['id']
+
     request = drive.files().get_media(fileId=dict_file['id'])
     file = io.BytesIO()
     downloader = googleapiclient.http.MediaIoBaseDownload(file, request)
@@ -143,6 +146,28 @@ def search():
     return flask.render_template('search.html',
                                  menu_items=get_menu_items(), query=query, results=results)
 
+
+
+@app.route('/save_dictionary')
+def save_dictionary():
+    if 'credentials' not in flask.session:
+        return flask.redirect('authorize')
+    if 'dict_file_id' not in flask.session:
+        return flask.redirect('load_dictionary')
+
+    file_name = flask.session.get('file_name', '_none_') + '/' + DICTIONARY_FILE_NAME
+    if not os.path.exists(file_name):
+        return flask.redirect('load_dictionary')
+
+    try:
+        save_dictionary_to_drive(
+            flask.session['credentials'],
+            flask.session['dict_file_id'],
+            flask.session['file_name']
+        )
+    except RefreshError:
+        return flask.redirect('authorize')
+    return flask.render_template('loaded.html', menu_items=get_menu_items())
 
 
 @app.route('/authorize')
@@ -240,11 +265,91 @@ def credentials_to_dict(credentials):
             'scopes': credentials.scopes}
 
 
+def _fix_zip_for_android(data):
+    """Patch a zip so Android's ZipInputStream can read it.
+
+    Two fixes:
+    1. Clear the data-descriptor flag (bit 3) from flag_bits.  Python's
+       zipfile sets bit 3 but fills CRC/sizes in the local header and does
+       NOT write a data descriptor record.  Android sees bit 3, ignores the
+       local header sizes, then fails looking for a data descriptor.
+    2. Zero external_attr in central directory entries.  Python writes OS
+       file permissions (e.g. 0x81b60000) which the app doesn't expect;
+       the original app-generated zips use 0x00000000.
+    """
+    data = bytearray(data)
+    DATA_DESC_FLAG = 0x0008
+
+    # Patch local file headers (signature PK\x03\x04, flags at offset +6)
+    pos = 0
+    while True:
+        pos = data.find(b'PK\x03\x04', pos)
+        if pos == -1:
+            break
+        flags = struct.unpack_from('<H', data, pos + 6)[0]
+        if flags & DATA_DESC_FLAG:
+            struct.pack_into('<H', data, pos + 6, flags & ~DATA_DESC_FLAG)
+        pos += 4
+
+    # Patch central directory headers (signature PK\x01\x02)
+    pos = 0
+    while True:
+        pos = data.find(b'PK\x01\x02', pos)
+        if pos == -1:
+            break
+        # Clear data-descriptor flag (offset +8)
+        flags = struct.unpack_from('<H', data, pos + 8)[0]
+        if flags & DATA_DESC_FLAG:
+            struct.pack_into('<H', data, pos + 8, flags & ~DATA_DESC_FLAG)
+        # Zero external_attr (offset +38)
+        struct.pack_into('<I', data, pos + 38, 0)
+        pos += 4
+
+    return bytes(data)
+
+
+def save_dictionary_to_drive(credentials_dict, file_id, session_dir):
+    """Zip dictionary.txt from session_dir and upload it to Drive, overwriting file_id."""
+    dict_path = os.path.join(session_dir, DICTIONARY_FILE_NAME)
+    if not os.path.exists(dict_path):
+        raise FileNotFoundError(f"No {DICTIONARY_FILE_NAME} in {session_dir}")
+
+    # Re-serialize JSON with compact separators (no spaces) to match app format
+    with open(dict_path, encoding='utf-8') as f:
+        dict_data = json.load(f)
+    dict_bytes = json.dumps(dict_data, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
+        dict_info = zipfile.ZipInfo(DICTIONARY_FILE_NAME)
+        dict_info.compress_type = zipfile.ZIP_DEFLATED
+        zf.writestr(dict_info, dict_bytes)
+        # removed.txt must exist in the archive (app requires it)
+        removed_info = zipfile.ZipInfo('removed.txt')
+        removed_info.compress_type = zipfile.ZIP_DEFLATED
+        zf.writestr(removed_info, b'')
+
+    # Fix zip for Android compatibility
+    fixed = _fix_zip_for_android(buf.getvalue())
+
+    # Save .wt locally for sideloading/debugging
+    wt_path = os.path.join(session_dir, 'dictionary.wt')
+    with open(wt_path, 'wb') as f:
+        f.write(fixed)
+
+    upload_buf = io.BytesIO(fixed)
+    credentials = google.oauth2.credentials.Credentials(**credentials_dict)
+    drive = build(API_SERVICE_NAME, API_VERSION, credentials=credentials)
+    media = googleapiclient.http.MediaIoBaseUpload(upload_buf, mimetype='application/zip')
+    drive.files().update(fileId=file_id, media_body=media).execute()
+
+
 def get_menu_items():
     file_name = flask.session.get('file_name', '_none_') + '/' + DICTIONARY_FILE_NAME
     out = []
     if 'file_name' in flask.session and os.path.exists(file_name):
         out.append(("Update Dictionary", "/load_dictionary"))
+        out.append(("Save to Drive", "/save_dictionary"))
         out.append(('Themes', "/themes"))
         out.append(('Search', "/search"))
     else:

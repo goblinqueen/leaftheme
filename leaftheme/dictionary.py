@@ -3,15 +3,24 @@ import uuid
 from datetime import datetime, timezone
 
 
+def _now_iso():
+    """Generate ISO timestamp matching the WordTheme app format: milliseconds + Z suffix."""
+    now = datetime.now(timezone.utc)
+    return now.strftime('%Y-%m-%dT%H:%M:%S.') + f'{now.microsecond // 1000:03d}Z'
+
+
 class Dictionary:
 
     class Theme:
+        _KNOWN_KEYS = {'id', 'uid', 'l', 'dm'}
+
         def __init__(self, value):
             self.id = value['id']
             self.uid = value.get('uid', str(uuid.uuid4()))
             self.name = value['l']
-            self.modified_date = value.get('dm', datetime.now(timezone.utc).isoformat())
+            self.modified_date = value.get('dm', _now_iso())
             self.words = {}
+            self._extra = {k: v for k, v in value.items() if k not in self._KNOWN_KEYS}
 
         def __str__(self):
             return self.name
@@ -41,15 +50,22 @@ class Dictionary:
             return out
 
     class Word:
+        _KNOWN_KEYS = {'id', 'uid', 'm', 't', 'dc', 'dm', 'tm', 'ca', 'di', 'dr', 'gcl'}
+
         def __init__(self, value):
             self.id = value['id']
             self.uid = value.get('uid', str(uuid.uuid4()))
             self.word = value['m']
             self.translation = value['t']
-            self.created_date = value.get('dc', datetime.now(timezone.utc).isoformat())
-            self.modified_date = value.get('dm', datetime.now(timezone.utc).isoformat())
+            self.created_date = value.get('dc', _now_iso())
+            self.modified_date = value.get('dm', _now_iso())
             self.score = value.get('tm', 0)
+            self.correct_answers = value.get('ca')
+            self.review_interval = value.get('di')
+            self.review_date = value.get('dr')
+            self.grammar_context = value.get('gcl')
             self.theme = None
+            self._extra = {k: v for k, v in value.items() if k not in self._KNOWN_KEYS}
 
         def set_theme(self, theme_id):
             self.theme = theme_id
@@ -70,7 +86,7 @@ class Dictionary:
         self.title = dict_dict.get('libelle', '')
         self.identifier = dict_dict.get('identifier', str(uuid.uuid4()))
         self.version = dict_dict.get('version', '3')
-        self.modified_date = dict_dict.get('dm', datetime.now(timezone.utc).isoformat())
+        self.modified_date = dict_dict.get('dm', _now_iso())
 
         self.themes = {x['id']: self.Theme(x) for x in dict_dict['ltheme']}
         self.words = {x['id']: self.Word(x) for x in dict_dict['lword']}
@@ -108,7 +124,9 @@ class Dictionary:
     def to_dict(self):
         ltheme = []
         for t in self.themes.values():
-            ltheme.append({'id': t.id, 'uid': t.uid, 'l': t.name, 'dm': t.modified_date})
+            entry = {'id': t.id, 'uid': t.uid, 'l': t.name, 'dm': t.modified_date}
+            entry.update(t._extra)
+            ltheme.append(entry)
 
         lword = []
         for w in self.words.values():
@@ -116,6 +134,15 @@ class Dictionary:
                      'dc': w.created_date, 'dm': w.modified_date}
             if w.score:
                 entry['tm'] = w.score
+            if w.correct_answers is not None:
+                entry['ca'] = w.correct_answers
+            if w.review_date is not None:
+                entry['dr'] = w.review_date
+            if w.review_interval is not None:
+                entry['di'] = w.review_interval
+            if w.grammar_context is not None:
+                entry['gcl'] = w.grammar_context
+            entry.update(w._extra)
             lword.append(entry)
 
         list_asso = []
@@ -144,7 +171,7 @@ class Dictionary:
 def main():
     import sys
     sys.stdout.reconfigure(encoding='utf-8')
-    path = "../ad3a7a57-efdf-4e58-8f93-1e8110431f1a/dictionary.txt"
+    path = "../004dd37d-cba6-4186-8dd6-158c3c0b20b8/dictionary.txt"
     with open(path, encoding="utf8") as f:
         dictionary = Dictionary(json.load(f))
 
