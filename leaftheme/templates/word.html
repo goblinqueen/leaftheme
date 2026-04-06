@@ -1,7 +1,7 @@
 {% extends 'base.html' %}
 
 {% block content %}
-<h2 class="mt-4">{{ word.word }}</h2>
+<h2 class="mt-4">{{ word.word }} <a href="https://glosbe.com/fi/ru/{{ word.word | urlencode }}" target="_blank" class="fs-6 text-muted">Glosbe</a></h2>
 <p class="fs-4 text-muted">{{ word.translation }}</p>
 
 <table class="table table-borderless w-auto mt-3">
@@ -52,6 +52,12 @@
             <th scope="row">ID</th>
             <td>{{ word.id }}</td>
         </tr>
+        {% for key, value in word._extra.items() %}
+        <tr>
+            <th scope="row">{{ key }}</th>
+            <td>{{ value }}</td>
+        </tr>
+        {% endfor %}
     </tbody>
 </table>
 {% endblock %}

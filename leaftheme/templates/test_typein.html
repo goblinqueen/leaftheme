@@ -17,7 +17,7 @@
                 <input type="text" id="answer-input" class="form-control" placeholder="Finnish word..." autofocus>
                 <button id="btn-check" class="btn btn-primary">Check</button>
             </div>
-            <button id="btn-dont-know" class="btn btn-outline-danger btn-sm">Don't Know</button>
+            <button id="btn-dont-know" class="btn btn-outline-danger btn-sm">Don't Know <kbd>Esc</kbd></button>
         </div>
 
         <div id="feedback-area" class="d-none mt-3">
@@ -56,7 +56,7 @@ document.addEventListener('DOMContentLoaded', () => {
         feedbackArea.classList.add('d-none');
         ratingButtons.classList.add('d-none');
         updateProgress();
-        answerInput.focus();
+        setTimeout(() => answerInput.focus(), 0);
     }
 
     function updateProgress() {
@@ -122,6 +122,20 @@ document.addEventListener('DOMContentLoaded', () => {
         btn.addEventListener('click', () => {
             recordAndAdvance(parseInt(btn.dataset.rating));
         });
+    });
+
+    // --- Keyboard shortcuts ---
+    document.addEventListener('keydown', (e) => {
+        if (document.activeElement === answerInput && e.key !== 'Escape') return;
+
+        if (!ratingButtons.classList.contains('d-none')) {
+            if (e.key === 'Enter') { e.preventDefault(); recordAndAdvance(2); return; }
+            if (e.key === '1') { e.preventDefault(); recordAndAdvance(1); return; }
+            if (e.key === '2') { e.preventDefault(); recordAndAdvance(0); return; }
+        }
+        if (!inputArea.classList.contains('d-none')) {
+            if (e.key === 'Escape') { dontKnowBtn.click(); return; }
+        }
     });
 
     function submitResults() {

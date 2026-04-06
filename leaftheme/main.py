@@ -1,6 +1,7 @@
 import io
 import json
 import os
+import random
 import struct
 import zipfile
 
@@ -39,6 +40,9 @@ def index():
 
 @app.route('/load_dictionary')
 def load_dictionary():
+    if _has_unsaved() and not flask.request.args.get('force'):
+        return flask.render_template('unsaved_warning.html', menu_items=get_menu_items())
+
     if 'credentials' not in flask.session:
         return flask.redirect('authorize')
 
@@ -90,6 +94,7 @@ def load_dictionary():
     with zipfile.ZipFile(file_name, 'r') as zip_file:
         zip_file.extract(DICTIONARY_FILE_NAME, flask.session['file_name'])
 
+    _clear_unsaved()
     return flask.render_template('loaded.html', menu_items=get_menu_items())
 
 
@@ -143,6 +148,7 @@ def add_word():
         wt_dict.add_word(theme_id, word_str, translation)
         with open(file_name, 'w', encoding='utf8') as f:
             json.dump(wt_dict.to_dict(), f, ensure_ascii=False, separators=(',', ':'))
+        _mark_unsaved()
         return flask.redirect(flask.url_for('get_words', theme_id=theme_id))
 
     preselected = flask.request.args.get('theme_id', type=int)
@@ -150,6 +156,18 @@ def add_word():
                                  menu_items=get_menu_items(),
                                  themes=wt_dict.themes.values(),
                                  preselected=preselected)
+
+
+@app.route('/test_extra/<int:word_id>')
+def test_extra_field(word_id):
+    """Temporary route: add a test extra field to one word to check Android app compatibility."""
+    wt_dict, file_name = _load_dictionary()
+    if wt_dict is None:
+        return flask.redirect('load_dictionary')
+    word = wt_dict.words[word_id]
+    word._extra['_test_prod_tm'] = 250
+    _save_dictionary(wt_dict, file_name)
+    return f"Added _test_prod_tm=250 to word '{word.word}' (id={word_id}). Now Save to Drive and check the app."
 
 
 @app.route('/word/<word_id>')
@@ -162,7 +180,9 @@ def get_word(word_id):
     with open(file_name, encoding="utf8") as f:
         wt_dict = dictionary.Dictionary(json.load(f))
 
-    word = wt_dict.words[int(word_id)]
+    word = wt_dict.words.get(int(word_id))
+    if word is None:
+        flask.abort(404)
     theme = wt_dict.themes[word.theme] if word.theme is not None else None
     return flask.render_template('word.html',
                                  menu_items=get_menu_items(), word=word, theme=theme)
@@ -249,7 +269,7 @@ def test_check_answer():
         return flask.jsonify(matched=False, correct_answer=correct)
 
     score = fuzz.ratio(answer.lower(), correct.lower())
-    matched = score >= 75
+    matched = score >= 65
     return flask.jsonify(matched=matched, correct_answer=correct)
 
 
@@ -260,6 +280,222 @@ def test_results():
     # Results stored in data['results'] as {word_id: rating}
     # Score updates will be added when assessment/review flows are built
     return flask.jsonify(status='ok', redirect=return_url)
+
+
+# --- Review (Spaced Repetition) flow ---
+
+REVIEW_BATCH_SIZE = 20
+
+
+@app.route('/review')
+def review_pick():
+    wt_dict, file_name = _load_dictionary()
+    if wt_dict is None:
+        return flask.redirect('load_dictionary')
+
+    # Count due words per theme + total
+    theme_counts = []
+    total_due = 0
+    for t in wt_dict.themes.values():
+        due = len(wt_dict.due_words(t.id))
+        theme_counts.append((t, due))
+        total_due += due
+
+    return flask.render_template('review_pick.html',
+                                 menu_items=get_menu_items(),
+                                 theme_counts=theme_counts,
+                                 total_due=total_due)
+
+
+@app.route('/review/start')
+def review_start():
+    wt_dict, file_name = _load_dictionary()
+    if wt_dict is None:
+        return flask.redirect('load_dictionary')
+
+    theme_id = flask.request.args.get('theme_id', type=int)
+    due = wt_dict.due_words(theme_id)
+
+    if not due:
+        return flask.render_template('review_done.html',
+                                     menu_items=get_menu_items(),
+                                     reviewed=0, theme_id=theme_id)
+
+    batch = random.sample(due, min(REVIEW_BATCH_SIZE, len(due)))
+    words_list = [{'id': w.id, 'word': w.word, 'translation': w.translation} for w in batch]
+    words_json = json.dumps(words_list, ensure_ascii=False)
+
+    return flask.render_template('review_session.html',
+                                 menu_items=get_menu_items(),
+                                 words_json=words_json,
+                                 theme_id=theme_id,
+                                 total_due=len(due))
+
+
+@app.route('/review/apply', methods=['POST'])
+def review_apply():
+    """Apply SM-2 ratings to reviewed words."""
+    data = flask.request.get_json()
+    results = data.get('results', {})  # {word_id_str: quality}
+    theme_id = data.get('theme_id')
+
+    wt_dict, file_name = _load_dictionary()
+    if wt_dict is None:
+        return flask.jsonify(status='error', message='No dictionary'), 400
+
+    for word_id_str, quality in results.items():
+        word_id = int(word_id_str)
+        if word_id in wt_dict.words:
+            wt_dict.words[word_id].sm2_review(quality)
+
+    _save_dictionary(wt_dict, file_name)
+
+    if theme_id is not None:
+        redirect = flask.url_for('review_start', theme_id=theme_id)
+    else:
+        redirect = flask.url_for('review_start')
+    return flask.jsonify(status='ok', reviewed=len(results), redirect=redirect)
+
+
+# --- Sort Theme flow ---
+
+SORT_THEME_NAMES = {
+    0: 'To Reverse',
+    1: "Don't Know",
+    2: 'Know',
+    3: 'Know Well',
+}
+SORT_BATCH_SIZE = 10
+SORT_REVERSE_MIX_CHANCE = 0.3  # 30% chance to mix in a "To Reverse" word
+
+
+def _load_dictionary():
+    """Load dictionary from session file. Returns (Dictionary, file_path) or redirects."""
+    file_name = flask.session.get('file_name', '_none_') + '/' + DICTIONARY_FILE_NAME
+    if not os.path.exists(file_name):
+        return None, file_name
+    with open(file_name, encoding="utf8") as f:
+        return dictionary.Dictionary(json.load(f)), file_name
+
+
+UNSAVED_MARKER = '_UNSAVED_'
+
+
+def _mark_unsaved():
+    session_dir = flask.session.get('file_name')
+    if session_dir:
+        open(os.path.join(session_dir, UNSAVED_MARKER), 'w').close()
+
+
+def _clear_unsaved():
+    session_dir = flask.session.get('file_name')
+    if session_dir:
+        path = os.path.join(session_dir, UNSAVED_MARKER)
+        if os.path.exists(path):
+            os.remove(path)
+
+
+def _has_unsaved():
+    session_dir = flask.session.get('file_name')
+    if session_dir:
+        return os.path.exists(os.path.join(session_dir, UNSAVED_MARKER))
+    return False
+
+
+def _save_dictionary(wt_dict, file_name):
+    """Write dictionary back to the session file and mark as unsaved."""
+    with open(file_name, 'w', encoding='utf8') as f:
+        json.dump(wt_dict.to_dict(), f, ensure_ascii=False, separators=(',', ':'))
+    _mark_unsaved()
+
+
+@app.route('/sort')
+def sort_pick_theme():
+    wt_dict, file_name = _load_dictionary()
+    if wt_dict is None:
+        return flask.redirect('load_dictionary')
+    return flask.render_template('sort_pick.html',
+                                 menu_items=get_menu_items(),
+                                 themes=wt_dict.themes.values())
+
+
+@app.route('/sort/<int:theme_id>')
+def sort_theme(theme_id):
+    wt_dict, file_name = _load_dictionary()
+    if wt_dict is None:
+        return flask.redirect('load_dictionary')
+
+    if theme_id not in wt_dict.themes:
+        return 'Theme not found', 404
+
+    # Ensure target themes exist
+    target_themes = {}
+    for rating, name in SORT_THEME_NAMES.items():
+        t = wt_dict.ensure_theme(name)
+        target_themes[rating] = t.id
+    _save_dictionary(wt_dict, file_name)
+
+    source_theme = wt_dict.themes[theme_id]
+    source_words = list(source_theme.words.values())
+
+    # Pick batch: up to SORT_BATCH_SIZE random words from source
+    batch = random.sample(source_words, min(SORT_BATCH_SIZE, len(source_words)))
+
+    # Mix in "To Reverse" words as flashcards
+    reverse_theme_id = target_themes[0]
+    if reverse_theme_id in wt_dict.themes:
+        reverse_words = list(wt_dict.themes[reverse_theme_id].words.values())
+        if reverse_words:
+            mix_count = max(1, int(len(batch) * SORT_REVERSE_MIX_CHANCE))
+            mix_words = random.sample(reverse_words, min(mix_count, len(reverse_words)))
+            batch.extend(mix_words)
+            random.shuffle(batch)
+
+    if not batch:
+        return flask.render_template('sort_done.html',
+                                     menu_items=get_menu_items(),
+                                     theme=source_theme, moved=0)
+
+    reverse_ids = {w.id for w in batch if w.theme == reverse_theme_id}
+    words_list = [{'id': w.id, 'word': w.word, 'translation': w.translation,
+                   'mode': 'flashcard' if w.id in reverse_ids else 'typein'} for w in batch]
+    words_json = json.dumps(words_list, ensure_ascii=False)
+
+    return flask.render_template('sort_flashcard.html',
+                                 menu_items=get_menu_items(),
+                                 words_json=words_json,
+                                 source_theme_id=theme_id,
+                                 target_themes_json=json.dumps(target_themes))
+
+
+@app.route('/sort/apply', methods=['POST'])
+def sort_apply():
+    """Apply sort results: move each word to its target theme based on rating."""
+    data = flask.request.get_json()
+    results = data.get('results', {})  # {word_id_str: rating}
+    source_theme_id = data.get('source_theme_id')
+    target_themes = data.get('target_themes', {})  # {rating_str: theme_id}
+
+    wt_dict, file_name = _load_dictionary()
+    if wt_dict is None:
+        return flask.jsonify(status='error', message='No dictionary'), 400
+
+    moved = 0
+    for word_id_str, rating in results.items():
+        word_id = int(word_id_str)
+        theme_id = target_themes.get(str(rating))
+        if theme_id is None or word_id not in wt_dict.words:
+            continue
+        word = wt_dict.words[word_id]
+        # Don't move if already in the target theme
+        if word.theme == theme_id:
+            continue
+        wt_dict.move_word(word_id, theme_id)
+        moved += 1
+
+    _save_dictionary(wt_dict, file_name)
+    return flask.jsonify(status='ok', moved=moved,
+                         redirect=flask.url_for('sort_theme', theme_id=source_theme_id))
 
 
 @app.route('/save_dictionary')
@@ -286,6 +522,7 @@ def save_dictionary():
     except RefreshError:
         return flask.redirect('authorize')
 
+    _clear_unsaved()
     word_count = sum(t.word_count() for t in wt_dict.themes.values())
     theme_count = len(wt_dict.themes)
     return flask.render_template('saved.html', menu_items=get_menu_items(),
@@ -472,10 +709,14 @@ def get_menu_items():
     out = []
     if 'file_name' in flask.session and os.path.exists(file_name):
         out.append(("Update Dictionary", "/load_dictionary"))
-        out.append(("Save to Drive", "/save_dictionary"))
+        unsaved = _has_unsaved()
+        save_label = "Save to Drive *" if unsaved else "Save to Drive"
+        out.append((save_label, "/save_dictionary"))
         out.append(('Themes', "/themes"))
         out.append(('Search', "/search"))
         out.append(('Add Word', "/add_word"))
+        out.append(('Sort Theme', "/sort"))
+        out.append(('Review', "/review"))
     else:
         out.append(("Load Dictionary", "/load_dictionary"))
     out.append(("Logout", "/clear"))

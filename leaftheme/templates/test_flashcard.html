@@ -14,8 +14,8 @@
         <p id="translation-display" class="fs-4 text-muted d-none"></p>
 
         <div id="initial-buttons" class="mt-4">
-            <button id="btn-reveal" class="btn btn-primary me-2">Reveal</button>
-            <button id="btn-dont-know" class="btn btn-outline-danger">Don't Know</button>
+            <button id="btn-reveal" class="btn btn-primary me-2">Reveal <kbd>Space</kbd></button>
+            <button id="btn-dont-know" class="btn btn-outline-danger">Don't Know <kbd>Esc</kbd></button>
         </div>
 
         {% include '_rating_buttons.html' %}
@@ -82,6 +82,19 @@ document.addEventListener('DOMContentLoaded', () => {
         btn.addEventListener('click', () => {
             recordAndAdvance(parseInt(btn.dataset.rating));
         });
+    });
+
+    // --- Keyboard shortcuts ---
+    document.addEventListener('keydown', (e) => {
+        if (!ratingButtons.classList.contains('d-none')) {
+            if (e.key === 'Enter') { e.preventDefault(); recordAndAdvance(2); return; }
+            if (e.key === '1') { e.preventDefault(); recordAndAdvance(1); return; }
+            if (e.key === '2') { e.preventDefault(); recordAndAdvance(0); return; }
+        }
+        if (!initialButtons.classList.contains('d-none')) {
+            if (e.key === ' ') { e.preventDefault(); revealBtn.click(); return; }
+            if (e.key === 'Escape') { dontKnowBtn.click(); return; }
+        }
     });
 
     function submitResults() {

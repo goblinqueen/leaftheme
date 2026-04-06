@@ -1,12 +1,26 @@
 import json
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 
 def _now_iso():
     """Generate ISO timestamp matching the WordTheme app format: milliseconds + Z suffix."""
     now = datetime.now(timezone.utc)
     return now.strftime('%Y-%m-%dT%H:%M:%S.') + f'{now.microsecond // 1000:03d}Z'
+
+
+def _future_iso(days):
+    """Generate ISO timestamp `days` from now."""
+    t = datetime.now(timezone.utc) + timedelta(days=days)
+    return t.strftime('%Y-%m-%dT%H:%M:%S.') + f'{t.microsecond // 1000:03d}Z'
+
+
+def _parse_iso(s):
+    """Parse an ISO timestamp string back to datetime."""
+    if s is None:
+        return None
+    s = s.replace('Z', '+00:00')
+    return datetime.fromisoformat(s)
 
 
 class Dictionary:
@@ -76,6 +90,70 @@ class Dictionary:
         def __repr__(self):
             return f"<Word {self.word}>"
 
+        # SM-2 defaults
+        DEFAULT_EASE = 250  # 2.5 × 100
+
+        @property
+        def ease_factor(self):
+            """Ease factor as int (×100). Treats legacy/unset scores as default 250."""
+            if self.score is None or self.score < 130:
+                return self.DEFAULT_EASE
+            return self.score
+
+        @property
+        def repetitions(self):
+            return self.correct_answers or 0
+
+        @property
+        def interval_days(self):
+            return self.review_interval or 0
+
+        def is_due(self):
+            """True if this word is due for review (or has never been reviewed)."""
+            if self.review_date is None:
+                return True
+            due = _parse_iso(self.review_date)
+            return datetime.now(timezone.utc) >= due
+
+        def sm2_review(self, quality):
+            """Apply SM-2 algorithm. quality: 0=fail, 1=hard, 2=good, 3=easy.
+
+            Maps our 0-3 scale to SM-2's 0-5 scale:
+              0 (fail)  → SM-2 grade 1
+              1 (hard)  → SM-2 grade 3
+              2 (good)  → SM-2 grade 4
+              3 (easy)  → SM-2 grade 5
+            """
+            grade_map = {0: 1, 1: 3, 2: 4, 3: 5}
+            grade = grade_map.get(quality, 1)
+
+            ef = self.ease_factor / 100.0
+            reps = self.repetitions
+            interval = self.interval_days
+
+            if grade >= 3:  # pass
+                if reps == 0:
+                    interval = 1
+                elif reps == 1:
+                    interval = 6
+                else:
+                    interval = round(interval * ef)
+                reps += 1
+            else:  # fail
+                reps = 0
+                interval = 1
+
+            # Update ease factor: EF' = EF + (0.1 - (5-grade) * (0.08 + (5-grade) * 0.02))
+            ef = ef + (0.1 - (5 - grade) * (0.08 + (5 - grade) * 0.02))
+            if ef < 1.3:
+                ef = 1.3
+
+            self.score = round(ef * 100)
+            self.correct_answers = reps
+            self.review_interval = interval
+            self.review_date = _future_iso(interval)
+            self.modified_date = _now_iso()
+
         def __eq__(self, other):
             return self.id == other.id
 
@@ -121,6 +199,29 @@ class Dictionary:
         self.themes[theme_id].add_word(word)
         return word
 
+    def move_word(self, word_id, new_theme_id):
+        """Move a word from its current theme to a different theme."""
+        if new_theme_id not in self.themes:
+            raise KeyError(f"Theme {new_theme_id} not found")
+        word = self.words[word_id]
+        # Remove from old theme
+        if word.theme is not None and word.theme in self.themes:
+            old_theme = self.themes[word.theme]
+            key = str(word)
+            if key in old_theme.words:
+                del old_theme.words[key]
+        # Add to new theme
+        word.set_theme(new_theme_id)
+        self.themes[new_theme_id].add_word(word)
+        return word
+
+    def ensure_theme(self, name):
+        """Return theme with given name, creating it if it doesn't exist."""
+        for t in self.themes.values():
+            if t.name == name:
+                return t
+        return self.add_theme(name)
+
     def to_dict(self):
         ltheme = []
         for t in self.themes.values():
@@ -160,6 +261,15 @@ class Dictionary:
             'lword': lword,
             'listWordThemeAssociation': [{'idTheme': -1, 'idWord': -1}],
         }
+
+    def due_words(self, theme_id=None):
+        """Return words that are due for review, optionally filtered by theme."""
+        words = self.words.values()
+        if theme_id is not None:
+            if theme_id not in self.themes:
+                return []
+            words = self.themes[theme_id].words.values()
+        return [w for w in words if w.is_due()]
 
     def search(self, query):
         results = []

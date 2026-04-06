@@ -1,0 +1,8 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<h2 class="mt-4">Unsaved Changes</h2>
+<p class="text-muted">You have local changes that haven't been saved to Drive. Reloading the dictionary will discard them.</p>
+<a href="/save_dictionary" class="btn btn-primary me-2 mt-2">Save to Drive first</a>
+<a href="/load_dictionary?force=1" class="btn btn-outline-danger mt-2">Discard and reload</a>
+{% endblock %}

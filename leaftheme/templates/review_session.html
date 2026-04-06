@@ -1,0 +1,148 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<div class="mt-4 mb-3">
+    <small id="progress-text" class="text-muted"></small>
+    <small class="text-muted ms-3">({{ total_due }} due total)</small>
+    <div class="progress mt-1" style="height: 6px;">
+        <div id="progress-bar" class="progress-bar" role="progressbar" style="width: 0%"></div>
+    </div>
+</div>
+
+<div class="card mx-auto mt-4" style="max-width: 500px;">
+    <div class="card-body text-center py-5">
+        <h2 class="card-title mb-4"><a id="word-display" href="#" class="text-decoration-none text-reset"></a></h2>
+
+        <!-- Reveal button -->
+        <div id="reveal-area">
+            <button id="btn-reveal" class="btn btn-outline-secondary">Reveal <kbd>Enter</kbd></button>
+        </div>
+
+        <!-- Translation + SM-2 rating buttons -->
+        <div id="rating-area" class="d-none mt-3">
+            <p id="translation-display" class="fs-4 mb-4"></p>
+            <p class="text-muted small">How well did you know this?</p>
+            <button class="btn btn-success me-2 btn-rating" data-rating="3">Easy <kbd>Enter</kbd></button>
+            <button class="btn btn-primary me-2 btn-rating" data-rating="2">Good <kbd>1</kbd></button>
+            <button class="btn btn-warning me-2 btn-rating" data-rating="1">Hard <kbd>2</kbd></button>
+            <button class="btn btn-danger btn-rating" data-rating="0">Fail <kbd>3</kbd></button>
+        </div>
+    </div>
+</div>
+
+<div class="text-center mt-2">
+    <button id="btn-undo" class="btn btn-sm btn-outline-secondary invisible">&#8592; Undo <kbd>Backspace</kbd></button>
+</div>
+
+<script id="words-data" type="application/json">{{ words_json | safe }}</script>
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+    const words = JSON.parse(document.getElementById('words-data').textContent);
+    const themeId = {{ theme_id | tojson }};
+    let currentIndex = 0;
+    const results = {};
+
+    const wordDisplay = document.getElementById('word-display');
+
+    const revealArea = document.getElementById('reveal-area');
+    const revealBtn = document.getElementById('btn-reveal');
+    const ratingArea = document.getElementById('rating-area');
+    const translationDisplay = document.getElementById('translation-display');
+    const progressBar = document.getElementById('progress-bar');
+    const progressText = document.getElementById('progress-text');
+    const undoBtn = document.getElementById('btn-undo');
+    const ratingColors = {3: '#198754', 2: '#0d6efd', 1: '#ffc107', 0: '#dc3545'};
+    const cardBody = document.querySelector('.card-body');
+    let animating = false;
+
+    function showWord(revealed = false) {
+        const w = words[currentIndex];
+        wordDisplay.textContent = w.word;
+        wordDisplay.href = '/word/' + w.id;
+        translationDisplay.textContent = w.translation;
+        if (revealed) {
+            revealArea.classList.add('d-none');
+            ratingArea.classList.remove('d-none');
+        } else {
+            revealArea.classList.remove('d-none');
+            ratingArea.classList.add('d-none');
+            revealBtn.focus();
+        }
+        undoBtn.classList.toggle('invisible', currentIndex === 0);
+        updateProgress();
+    }
+
+    function updateProgress() {
+        const pct = (currentIndex + 1) / words.length * 100;
+        progressBar.style.width = pct + '%';
+        progressText.textContent = (currentIndex + 1) + ' / ' + words.length;
+    }
+
+    function reveal() {
+        revealArea.classList.add('d-none');
+        ratingArea.classList.remove('d-none');
+    }
+
+    function recordAndAdvance(quality) {
+        if (animating) return;
+        animating = true;
+        results[words[currentIndex].id] = quality;
+        cardBody.style.transition = 'background-color 0s';
+        cardBody.style.backgroundColor = ratingColors[quality];
+        setTimeout(() => {
+            cardBody.style.transition = 'background-color 0.4s';
+            cardBody.style.backgroundColor = '';
+            animating = false;
+            currentIndex++;
+            if (currentIndex < words.length) {
+                showWord();
+            } else {
+                undoBtn.classList.add('invisible');
+                submitResults();
+            }
+        }, 200);
+    }
+
+    function undo() {
+        if (animating || currentIndex === 0) return;
+        currentIndex--;
+        delete results[words[currentIndex].id];
+        cardBody.style.transition = 'none';
+        cardBody.style.backgroundColor = '';
+        showWord(true);
+    }
+
+    revealBtn.addEventListener('click', reveal);
+    undoBtn.addEventListener('click', undo);
+
+    ratingArea.querySelectorAll('.btn-rating').forEach(btn => {
+        btn.addEventListener('click', () => recordAndAdvance(parseInt(btn.dataset.rating)));
+    });
+
+    document.addEventListener('keydown', (e) => {
+        if (!ratingArea.classList.contains('d-none')) {
+            if (e.key === 'Enter') { e.preventDefault(); recordAndAdvance(3); return; }
+            if (e.key === '1') { e.preventDefault(); recordAndAdvance(2); return; }
+            if (e.key === '2') { e.preventDefault(); recordAndAdvance(1); return; }
+            if (e.key === '3') { e.preventDefault(); recordAndAdvance(0); return; }
+        }
+        if (!revealArea.classList.contains('d-none')) {
+            if (e.key === 'Enter') { e.preventDefault(); reveal(); return; }
+        }
+        if (e.key === 'Backspace') { e.preventDefault(); undo(); return; }
+    });
+
+    function submitResults() {
+        fetch('/review/apply', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({results: results, theme_id: themeId})
+        })
+        .then(r => r.json())
+        .then(data => { window.location.href = data.redirect; });
+    }
+
+    showWord();
+});
+</script>
+{% endblock %}
