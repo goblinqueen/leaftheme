@@ -49,50 +49,51 @@ def load_dictionary():
     try:
         credentials = google.oauth2.credentials.Credentials(
             **flask.session['credentials'])
+
+        drive = build(API_SERVICE_NAME, API_VERSION, credentials=credentials)
+
+        query = ("mimeType = 'application/vnd.google-apps.folder' " +
+                 "and name = 'WordTheme' and 'root' in parents and trashed=false")
+
+        fields = 'files(id, name, mimeType, modifiedTime)'
+
+        wt_folders = drive.files().list(q=query, fields=fields).execute()
+        wt_folders = wt_folders.get("files", [])
+
+        if not wt_folders:
+            return "No WordTheme folders found."
+
+        dict_file = None
+
+        for item in wt_folders:
+            query = "mimeType = 'application/zip' " \
+                     "and name contains '.wt' " \
+                     "and '{}' in parents " \
+                     "and trashed=false".format(item['id'])
+            results = (
+                drive.files().list(q=query, fields=fields).execute()
+            )
+            child_items = results.get("files", [])
+            for child_item in child_items:
+                if not dict_file or child_item['modifiedTime'] > dict_file['modifiedTime']:
+                    dict_file = child_item
+
+        flask.session['dict_file_id'] = dict_file['id']
+
+        request = drive.files().get_media(fileId=dict_file['id'])
+        file = io.BytesIO()
+        downloader = googleapiclient.http.MediaIoBaseDownload(file, request)
+        done = False
+        while done is False:
+            status, done = downloader.next_chunk()
+        file_name = f'{flask.session['file_name']}/dictionary.zip'
+        with open(file_name, 'wb') as f:
+            f.write(file.getvalue())
+        with zipfile.ZipFile(file_name, 'r') as zip_file:
+            zip_file.extract(DICTIONARY_FILE_NAME, flask.session['file_name'])
+
     except RefreshError:
-        return flask.redirect('authorize')
-
-    drive = build(API_SERVICE_NAME, API_VERSION, credentials=credentials)
-
-    query = ("mimeType = 'application/vnd.google-apps.folder' " +
-             "and name = 'WordTheme' and 'root' in parents and trashed=false")
-
-    fields = 'files(id, name, mimeType, modifiedTime)'
-
-    wt_folders = drive.files().list(q=query, fields=fields).execute()
-    wt_folders = wt_folders.get("files", [])
-
-    if not wt_folders:
-        return "No WordTheme folders found."
-
-    dict_file = None
-
-    for item in wt_folders:
-        query = "mimeType = 'application/zip' " \
-                 "and name contains '.wt' " \
-                 "and '{}' in parents " \
-                 "and trashed=false".format(item['id'])
-        results = (
-            drive.files().list(q=query, fields=fields).execute()
-        )
-        child_items = results.get("files", [])
-        for child_item in child_items:
-            if not dict_file or child_item['modifiedTime'] > dict_file['modifiedTime']:
-                dict_file = child_item
-
-    flask.session['dict_file_id'] = dict_file['id']
-
-    request = drive.files().get_media(fileId=dict_file['id'])
-    file = io.BytesIO()
-    downloader = googleapiclient.http.MediaIoBaseDownload(file, request)
-    done = False
-    while done is False:
-        status, done = downloader.next_chunk()
-    file_name = f'{flask.session['file_name']}/dictionary.zip'
-    with open(file_name, 'wb') as f:
-        f.write(file.getvalue())
-    with zipfile.ZipFile(file_name, 'r') as zip_file:
-        zip_file.extract(DICTIONARY_FILE_NAME, flask.session['file_name'])
+        return flask.redirect(flask.url_for('clear'))
 
     _clear_unsaved()
     return flask.render_template('loaded.html', menu_items=get_menu_items())
