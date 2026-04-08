@@ -357,18 +357,6 @@ def review_apply():
     return flask.jsonify(status='ok', reviewed=len(results), redirect=redirect)
 
 
-# --- Sort Theme flow ---
-
-SORT_THEME_NAMES = {
-    0: 'To Reverse',
-    1: "Don't Know",
-    2: 'Know',
-    3: 'Know Well',
-}
-SORT_BATCH_SIZE = 10
-SORT_REVERSE_MIX_CHANCE = 0.3  # 30% chance to mix in a "To Reverse" word
-
-
 def _load_dictionary():
     """Load dictionary from session file. Returns (Dictionary, file_path) or redirects."""
     file_name = flask.session.get('file_name', '_none_') + '/' + DICTIONARY_FILE_NAME
@@ -407,95 +395,6 @@ def _save_dictionary(wt_dict, file_name):
     with open(file_name, 'w', encoding='utf8') as f:
         json.dump(wt_dict.to_dict(), f, ensure_ascii=False, separators=(',', ':'))
     _mark_unsaved()
-
-
-@app.route('/sort')
-def sort_pick_theme():
-    wt_dict, file_name = _load_dictionary()
-    if wt_dict is None:
-        return flask.redirect('load_dictionary')
-    return flask.render_template('sort_pick.html',
-                                 menu_items=get_menu_items(),
-                                 themes=wt_dict.themes.values())
-
-
-@app.route('/sort/<int:theme_id>')
-def sort_theme(theme_id):
-    wt_dict, file_name = _load_dictionary()
-    if wt_dict is None:
-        return flask.redirect('load_dictionary')
-
-    if theme_id not in wt_dict.themes:
-        return 'Theme not found', 404
-
-    # Ensure target themes exist
-    target_themes = {}
-    for rating, name in SORT_THEME_NAMES.items():
-        t = wt_dict.ensure_theme(name)
-        target_themes[rating] = t.id
-    _save_dictionary(wt_dict, file_name)
-
-    source_theme = wt_dict.themes[theme_id]
-    source_words = list(source_theme.words.values())
-
-    # Pick batch: up to SORT_BATCH_SIZE random words from source
-    batch = random.sample(source_words, min(SORT_BATCH_SIZE, len(source_words)))
-
-    # Mix in "To Reverse" words as flashcards
-    reverse_theme_id = target_themes[0]
-    if reverse_theme_id in wt_dict.themes:
-        reverse_words = list(wt_dict.themes[reverse_theme_id].words.values())
-        if reverse_words:
-            mix_count = max(1, int(len(batch) * SORT_REVERSE_MIX_CHANCE))
-            mix_words = random.sample(reverse_words, min(mix_count, len(reverse_words)))
-            batch.extend(mix_words)
-            random.shuffle(batch)
-
-    if not batch:
-        return flask.render_template('sort_done.html',
-                                     menu_items=get_menu_items(),
-                                     theme=source_theme, moved=0)
-
-    reverse_ids = {w.id for w in batch if w.theme == reverse_theme_id}
-    words_list = [{'id': w.id, 'word': w.word, 'translation': w.translation,
-                   'mode': 'flashcard' if w.id in reverse_ids else 'typein'} for w in batch]
-    words_json = json.dumps(words_list, ensure_ascii=False)
-
-    return flask.render_template('sort_flashcard.html',
-                                 menu_items=get_menu_items(),
-                                 words_json=words_json,
-                                 source_theme_id=theme_id,
-                                 target_themes_json=json.dumps(target_themes))
-
-
-@app.route('/sort/apply', methods=['POST'])
-def sort_apply():
-    """Apply sort results: move each word to its target theme based on rating."""
-    data = flask.request.get_json()
-    results = data.get('results', {})  # {word_id_str: rating}
-    source_theme_id = data.get('source_theme_id')
-    target_themes = data.get('target_themes', {})  # {rating_str: theme_id}
-
-    wt_dict, file_name = _load_dictionary()
-    if wt_dict is None:
-        return flask.jsonify(status='error', message='No dictionary'), 400
-
-    moved = 0
-    for word_id_str, rating in results.items():
-        word_id = int(word_id_str)
-        theme_id = target_themes.get(str(rating))
-        if theme_id is None or word_id not in wt_dict.words:
-            continue
-        word = wt_dict.words[word_id]
-        # Don't move if already in the target theme
-        if word.theme == theme_id:
-            continue
-        wt_dict.move_word(word_id, theme_id)
-        moved += 1
-
-    _save_dictionary(wt_dict, file_name)
-    return flask.jsonify(status='ok', moved=moved,
-                         redirect=flask.url_for('sort_theme', theme_id=source_theme_id))
 
 
 @app.route('/save_dictionary')
@@ -715,7 +614,6 @@ def get_menu_items():
         out.append(('Themes', "/themes"))
         out.append(('Search', "/search"))
         out.append(('Add Word', "/add_word"))
-        out.append(('Sort Theme', "/sort"))
         out.append(('Review', "/review"))
     else:
         out.append(("Load Dictionary", "/load_dictionary"))
