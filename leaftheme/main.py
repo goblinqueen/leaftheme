@@ -102,6 +102,7 @@ def load_dictionary():
         done = False
         while done is False:
             status, done = downloader.next_chunk()
+        os.makedirs(flask.session['file_name'], exist_ok=True)
         file_name = f'{flask.session['file_name']}/dictionary.zip'
         with open(file_name, 'wb') as f:
             f.write(file.getvalue())
