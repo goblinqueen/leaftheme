@@ -215,6 +215,15 @@ class Dictionary:
         self.themes[new_theme_id].add_word(word)
         return word
 
+    def remove_word(self, word_id):
+        """Remove a word from the dictionary and its theme."""
+        if word_id not in self.words:
+            raise KeyError(f"Word {word_id} not found")
+        word = self.words.pop(word_id)
+        if word.theme is not None and word.theme in self.themes:
+            self.themes[word.theme].words.pop(str(word), None)
+        return word
+
     def ensure_theme(self, name):
         """Return theme with given name, creating it if it doesn't exist."""
         for t in self.themes.values():

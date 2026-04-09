@@ -14,6 +14,9 @@ import googleapiclient.discovery
 import googleapiclient.http
 from googleapiclient.discovery import build
 from . import dictionary
+from glosbe import GlosbeTranslator
+
+_glosbe = GlosbeTranslator(lang_from='fi', lang_to='ru', delay=0)
 
 PROJECT_ID = "goblin-queendom"
 
@@ -31,6 +34,19 @@ os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
 
 app = flask.Flask(__name__)
 app.secret_key = os.environ['SECRET_KEY']
+
+
+@app.template_filter('fmtdate')
+def fmtdate(iso):
+    """Format an ISO timestamp string to 'DD Mon YYYY'."""
+    if not iso:
+        return ''
+    try:
+        from datetime import datetime, timezone
+        dt = datetime.fromisoformat(iso.replace('Z', '+00:00'))
+        return f"{dt.day} {dt.strftime('%b %Y')}"
+    except Exception:
+        return iso
 
 
 @app.route('/')
@@ -93,7 +109,7 @@ def load_dictionary():
             zip_file.extract(DICTIONARY_FILE_NAME, flask.session['file_name'])
 
     except RefreshError:
-        return flask.redirect(flask.url_for('clear'))
+        return flask.redirect(flask.url_for('clear_credentials'))
 
     _clear_unsaved()
     return flask.render_template('loaded.html', menu_items=get_menu_items())
@@ -171,22 +187,61 @@ def test_extra_field(word_id):
     return f"Added _test_prod_tm=250 to word '{word.word}' (id={word_id}). Now Save to Drive and check the app."
 
 
-@app.route('/word/<word_id>')
+@app.route('/word/<int:word_id>', methods=['GET', 'POST'])
 def get_word(word_id):
-    file_name = flask.session.get('file_name', '_none_') + '/' + DICTIONARY_FILE_NAME
-
-    if not os.path.exists(file_name):
+    wt_dict, file_name = _load_dictionary()
+    if wt_dict is None:
         return flask.redirect('load_dictionary')
 
-    with open(file_name, encoding="utf8") as f:
-        wt_dict = dictionary.Dictionary(json.load(f))
-
-    word = wt_dict.words.get(int(word_id))
+    word = wt_dict.words.get(word_id)
     if word is None:
         flask.abort(404)
+
+    if flask.request.method == 'POST':
+        new_word = flask.request.form.get('word', '').strip()
+        new_translation = flask.request.form.get('translation', '').strip()
+        new_theme_id = flask.request.form.get('theme_id', type=int)
+        if new_word:
+            word.word = new_word
+        if new_translation:
+            word.translation = new_translation
+        if new_theme_id is not None and new_theme_id != word.theme:
+            wt_dict.move_word(word_id, new_theme_id)
+        _save_dictionary(wt_dict, file_name)
+        return flask.redirect(flask.url_for('get_word', word_id=word_id))
+
     theme = wt_dict.themes[word.theme] if word.theme is not None else None
     return flask.render_template('word.html',
-                                 menu_items=get_menu_items(), word=word, theme=theme)
+                                 menu_items=get_menu_items(), word=word, theme=theme,
+                                 all_themes=wt_dict.themes.values())
+
+
+@app.route('/word/<int:word_id>/glosbe')
+def word_glosbe(word_id):
+    wt_dict, file_name = _load_dictionary()
+    if wt_dict is None:
+        return flask.jsonify(error='no dictionary'), 400
+    word = wt_dict.words.get(word_id)
+    if word is None:
+        return flask.jsonify(error='not found'), 404
+    translation = _glosbe.translate(word.word)
+    return flask.jsonify(translation=translation)
+
+
+@app.route('/word/<int:word_id>/delete', methods=['POST'])
+def delete_word(word_id):
+    wt_dict, file_name = _load_dictionary()
+    if wt_dict is None:
+        return flask.redirect('load_dictionary')
+    word = wt_dict.words.get(word_id)
+    if word is None:
+        flask.abort(404)
+    theme_id = word.theme
+    wt_dict.remove_word(word_id)
+    _save_dictionary(wt_dict, file_name)
+    if theme_id is not None:
+        return flask.redirect(flask.url_for('get_words', theme_id=theme_id))
+    return flask.redirect(flask.url_for('get_themes'))
 
 
 @app.route('/search')

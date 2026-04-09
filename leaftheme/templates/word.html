@@ -1,63 +1,109 @@
 {% extends 'base.html' %}
 
 {% block content %}
-<h2 class="mt-4">{{ word.word }} <a href="https://glosbe.com/fi/ru/{{ word.word | urlencode }}" target="_blank" class="fs-6 text-muted">Glosbe</a></h2>
+<h2 class="mt-4">
+    {{ word.word }}
+    <a href="https://glosbe.com/fi/ru/{{ word.word | urlencode }}" target="_blank" class="fs-6 text-muted">Glosbe</a>
+</h2>
 <p class="fs-4 text-muted">{{ word.translation }}</p>
 
-<table class="table table-borderless w-auto mt-3">
-    <tbody>
-        {% if theme %}
-        <tr>
-            <th scope="row">Theme</th>
-            <td><a href="/words/{{ theme.id }}">{{ theme.name }}</a></td>
-        </tr>
-        {% endif %}
-        <tr>
-            <th scope="row">Score</th>
-            <td>{{ word.score }}</td>
-        </tr>
-        {% if word.correct_answers is not none %}
-        <tr>
-            <th scope="row">Correct answers</th>
-            <td>{{ word.correct_answers }}</td>
-        </tr>
-        {% endif %}
-        {% if word.review_interval is not none %}
-        <tr>
-            <th scope="row">Review interval</th>
-            <td>{{ word.review_interval }}</td>
-        </tr>
-        {% endif %}
-        {% if word.review_date is not none %}
-        <tr>
-            <th scope="row">Next review</th>
-            <td>{{ word.review_date }}</td>
-        </tr>
-        {% endif %}
-        {% if word.grammar_context %}
-        <tr>
-            <th scope="row">Grammar</th>
-            <td>{{ word.grammar_context }}</td>
-        </tr>
-        {% endif %}
-        <tr>
-            <th scope="row">Created</th>
-            <td>{{ word.created_date }}</td>
-        </tr>
-        <tr>
-            <th scope="row">Modified</th>
-            <td>{{ word.modified_date }}</td>
-        </tr>
-        <tr>
-            <th scope="row">ID</th>
-            <td>{{ word.id }}</td>
-        </tr>
-        {% for key, value in word._extra.items() %}
-        <tr>
-            <th scope="row">{{ key }}</th>
-            <td>{{ value }}</td>
-        </tr>
-        {% endfor %}
-    </tbody>
-</table>
+<form method="post" class="mt-3" style="max-width: 420px;">
+    <div class="mb-2">
+        <label class="form-label small text-muted mb-1">Finnish</label>
+        <input type="text" name="word" class="form-control" value="{{ word.word }}">
+    </div>
+    <div class="mb-2">
+        <label class="form-label small text-muted mb-1">Russian</label>
+        <div class="input-group">
+            <input type="text" name="translation" id="translation-input" class="form-control" value="{{ word.translation }}">
+            <button type="button" id="btn-glosbe" class="btn btn-outline-secondary" title="Fetch from Glosbe">
+                <span id="glosbe-label">Glosbe</span>
+                <span id="glosbe-spinner" class="spinner-border spinner-border-sm d-none" role="status"></span>
+            </button>
+        </div>
+    </div>
+    <div class="mb-2">
+        <label class="form-label small text-muted mb-1">Theme</label>
+        <select name="theme_id" class="form-select">
+            {% for t in all_themes %}
+            <option value="{{ t.id }}" {% if t.id == word.theme %}selected{% endif %}>{{ t.name }}</option>
+            {% endfor %}
+        </select>
+    </div>
+    <button type="submit" class="btn btn-primary btn-sm">Save</button>
+</form>
+
+<form method="post" action="/word/{{ word.id }}/delete" class="mt-2"
+      onsubmit="return confirm('Delete {{ word.word }}?')">
+    <button type="submit" class="btn btn-outline-danger btn-sm">Delete word</button>
+</form>
+
+<dl class="row mt-4" style="max-width: 420px;">
+
+    <dt class="col-5 text-muted fw-normal">Ease factor</dt>
+    <dd class="col-7">
+        {{ "%.2f"|format(word.ease_factor / 100) }}
+        {% if word.ease_factor == word.DEFAULT_EASE %}<span class="text-muted small">(default)</span>{% endif %}
+    </dd>
+
+    {% if word.correct_answers is not none %}
+    <dt class="col-5 text-muted fw-normal">Correct answers</dt>
+    <dd class="col-7">{{ word.correct_answers }}</dd>
+    {% endif %}
+
+    {% if word.review_interval is not none %}
+    <dt class="col-5 text-muted fw-normal">Interval</dt>
+    <dd class="col-7">{{ word.review_interval }} day{% if word.review_interval != 1 %}s{% endif %}</dd>
+    {% endif %}
+
+    {% if word.review_date is not none %}
+    <dt class="col-5 text-muted fw-normal">Next review</dt>
+    <dd class="col-7">
+        {{ word.review_date | fmtdate }}
+        {% if word.is_due() %}<span class="badge bg-warning text-dark ms-1">due</span>{% endif %}
+    </dd>
+    {% endif %}
+
+    <dt class="col-5 text-muted fw-normal">Added</dt>
+    <dd class="col-7">{{ word.created_date | fmtdate }}</dd>
+
+    <dt class="col-5 text-muted fw-normal">Modified</dt>
+    <dd class="col-7">{{ word.modified_date | fmtdate }}</dd>
+
+    <dt class="col-5 text-muted fw-normal">ID</dt>
+    <dd class="col-7 text-muted">{{ word.id }}</dd>
+
+    {% for key, value in word._extra.items() %}
+    <dt class="col-5 text-muted fw-normal">{{ key }}</dt>
+    <dd class="col-7">{{ value }}</dd>
+    {% endfor %}
+
+</dl>
+
+<script>
+document.getElementById('btn-glosbe').addEventListener('click', () => {
+    const btn = document.getElementById('btn-glosbe');
+    const label = document.getElementById('glosbe-label');
+    const spinner = document.getElementById('glosbe-spinner');
+    btn.disabled = true;
+    label.classList.add('d-none');
+    spinner.classList.remove('d-none');
+
+    fetch('/word/{{ word.id }}/glosbe')
+        .then(r => r.json())
+        .then(data => {
+            if (data.translation) {
+                document.getElementById('translation-input').value = data.translation;
+            } else {
+                alert('No translation found.');
+            }
+        })
+        .catch(() => alert('Glosbe fetch failed.'))
+        .finally(() => {
+            btn.disabled = false;
+            label.classList.remove('d-none');
+            spinner.classList.add('d-none');
+        });
+});
+</script>
 {% endblock %}
