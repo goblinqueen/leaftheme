@@ -8,12 +8,15 @@
 </form>
 
 </p>
-<h2 class="mt-4">{{ query }}</h2>
-<p>
-    <ul>
-    {% for res in results %}
-    <li><a href="/word/{{ res[1].id }}">{{ res[1] }}</a> — {{ res[1].translation }} <sup><a href="/words/{{ res[2] }}">{{ res[3] }}</a></sup> <br /></li>
-    {% endfor %}
-    </ul>
-</p>
+<div class="d-flex align-items-center gap-3 mt-4">
+    <h2 class="mb-0">{{ query }}</h2>
+    {% if query %}
+    <a href="/add_word?word={{ query | urlencode }}" class="btn btn-outline-primary btn-sm">+ Add</a>
+    {% endif %}
+</div>
+<ul class="mt-3">
+{% for res in results %}
+<li><a href="/word/{{ res[1].id }}">{{ res[1] }}</a> — {{ res[1].translation }} <sup><a href="/words/{{ res[2] }}">{{ res[3] }}</a></sup></li>
+{% endfor %}
+</ul>
 {% endblock %}

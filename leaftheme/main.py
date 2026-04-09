@@ -14,9 +14,19 @@ import googleapiclient.discovery
 import googleapiclient.http
 from googleapiclient.discovery import build
 from . import dictionary
+import re
 from glosbe import GlosbeTranslator
 
-_glosbe = GlosbeTranslator(lang_from='fi', lang_to='ru', delay=0)
+_glosbe_fi_ru = GlosbeTranslator(lang_from='fi', lang_to='ru', delay=0)
+_glosbe_ru_fi = GlosbeTranslator(lang_from='ru', lang_to='fi', delay=0)
+_glosbe = _glosbe_fi_ru  # default, used by word_glosbe
+
+
+def _pick_glosbe(word):
+    """Return (translator, lang_from, lang_to) based on detected script."""
+    if re.search(r'[А-Яа-яёЁ]', word):
+        return _glosbe_ru_fi, 'ru', 'fi'
+    return _glosbe_fi_ru, 'fi', 'ru'
 
 PROJECT_ID = "goblin-queendom"
 
@@ -163,6 +173,21 @@ def add_word():
         theme_id = int(flask.request.form['theme_id'])
         word_str = flask.request.form['word'].strip()
         translation = flask.request.form['translation'].strip()
+
+        existing = next((w for w in wt_dict.words.values()
+                         if w.word.lower() == word_str.lower()), None)
+        if existing:
+            existing_theme = wt_dict.themes.get(existing.theme)
+            error = f'"{existing.word}" already exists' + (
+                f' in {existing_theme.name}' if existing_theme else '')
+            return flask.render_template('add_word.html',
+                                         menu_items=get_menu_items(),
+                                         themes=wt_dict.themes.values(),
+                                         preselected=theme_id,
+                                         prefill_word=word_str,
+                                         prefill_translation=translation,
+                                         error=error)
+
         wt_dict.add_word(theme_id, word_str, translation)
         with open(file_name, 'w', encoding='utf8') as f:
             json.dump(wt_dict.to_dict(), f, ensure_ascii=False, separators=(',', ':'))
@@ -170,10 +195,12 @@ def add_word():
         return flask.redirect(flask.url_for('get_words', theme_id=theme_id))
 
     preselected = flask.request.args.get('theme_id', type=int)
+    prefill_word = flask.request.args.get('word', '')
     return flask.render_template('add_word.html',
                                  menu_items=get_menu_items(),
                                  themes=wt_dict.themes.values(),
-                                 preselected=preselected)
+                                 preselected=preselected,
+                                 prefill_word=prefill_word)
 
 
 @app.route('/test_extra/<int:word_id>')
@@ -227,6 +254,16 @@ def word_glosbe(word_id):
         return flask.jsonify(error='not found'), 404
     translation = _glosbe.translate(word.word)
     return flask.jsonify(translation=translation)
+
+
+@app.route('/glosbe')
+def glosbe_lookup():
+    word = flask.request.args.get('word', '').strip()
+    if not word:
+        return flask.jsonify(error='no word'), 400
+    translator, lang_from, lang_to = _pick_glosbe(word)
+    translation = translator.translate(word)
+    return flask.jsonify(translation=translation, lang_from=lang_from, lang_to=lang_to)
 
 
 @app.route('/word/<int:word_id>/delete', methods=['POST'])

@@ -2,23 +2,69 @@
 
 {% block content %}
 <h2 class="mt-4">Add Word</h2>
-<form method="post" action="/add_word" class="mt-3" style="max-width: 400px;">
-    <div class="mb-3">
-        <label for="theme_id" class="form-label">Theme</label>
-        <select class="form-select" id="theme_id" name="theme_id" required>
+
+<form method="post" action="/add_word" class="mt-3" style="max-width: 420px;">
+    {% if error %}
+    <div class="alert alert-warning py-2">{{ error }}</div>
+    {% endif %}
+    <div class="mb-2">
+        <label class="form-label small text-muted mb-1">Finnish</label>
+        <input type="text" name="word" id="word-input" class="form-control" required autofocus
+               value="{{ prefill_word or '' }}">
+    </div>
+    <div class="mb-2">
+        <label class="form-label small text-muted mb-1">Russian</label>
+        <div class="input-group">
+            <input type="text" name="translation" id="translation-input" class="form-control" required
+                   value="{{ prefill_translation or '' }}">
+            <button type="button" id="btn-glosbe" class="btn btn-outline-secondary" title="Fetch from Glosbe">
+                <span id="glosbe-label">Glosbe</span>
+                <span id="glosbe-spinner" class="spinner-border spinner-border-sm d-none" role="status"></span>
+            </button>
+            <a id="glosbe-link" href="#" target="_blank" class="btn btn-outline-secondary d-none">↗</a>
+        </div>
+    </div>
+    <div class="mb-2">
+        <label class="form-label small text-muted mb-1">Theme</label>
+        <select name="theme_id" class="form-select" required>
             {% for theme in themes %}
             <option value="{{ theme.id }}" {% if preselected == theme.id %}selected{% endif %}>{{ theme.name }}</option>
             {% endfor %}
         </select>
     </div>
-    <div class="mb-3">
-        <label for="word" class="form-label">Word</label>
-        <input type="text" class="form-control" id="word" name="word" required autofocus>
-    </div>
-    <div class="mb-3">
-        <label for="translation" class="form-label">Translation</label>
-        <input type="text" class="form-control" id="translation" name="translation" required>
-    </div>
-    <button type="submit" class="btn btn-primary">Add</button>
+    <button type="submit" class="btn btn-primary btn-sm">Add</button>
 </form>
+
+<script>
+document.getElementById('btn-glosbe').addEventListener('click', () => {
+    const word = document.getElementById('word-input').value.trim();
+    if (!word) { alert('Enter a Finnish word first.'); return; }
+
+    const btn = document.getElementById('btn-glosbe');
+    const label = document.getElementById('glosbe-label');
+    const spinner = document.getElementById('glosbe-spinner');
+    btn.disabled = true;
+    label.classList.add('d-none');
+    spinner.classList.remove('d-none');
+
+    fetch('/glosbe?word=' + encodeURIComponent(word))
+        .then(r => r.json())
+        .then(data => {
+            if (data.translation) {
+                document.getElementById('translation-input').value = data.translation;
+            } else {
+                alert('No translation found.');
+            }
+            const link = document.getElementById('glosbe-link');
+            link.href = `https://glosbe.com/${data.lang_from}/${data.lang_to}/` + encodeURIComponent(word);
+            link.classList.remove('d-none');
+        })
+        .catch(() => alert('Glosbe fetch failed.'))
+        .finally(() => {
+            btn.disabled = false;
+            label.classList.remove('d-none');
+            spinner.classList.add('d-none');
+        });
+});
+</script>
 {% endblock %}
