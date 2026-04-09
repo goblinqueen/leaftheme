@@ -1,0 +1,138 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<h2 class="mt-4">Statistics</h2>
+
+<!-- Summary cards -->
+<div class="row g-3 mt-2" style="max-width: 700px;">
+    <div class="col-6 col-md-3">
+        <div class="card text-center">
+            <div class="card-body py-3">
+                <div class="fs-3 fw-bold">{{ total_words }}</div>
+                <div class="text-muted small">Words</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-6 col-md-3">
+        <div class="card text-center">
+            <div class="card-body py-3">
+                <div class="fs-3 fw-bold">{{ total_themes }}</div>
+                <div class="text-muted small">Themes</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-6 col-md-3">
+        <div class="card text-center">
+            <div class="card-body py-3">
+                <div class="fs-3 fw-bold text-warning">{{ due_count }}</div>
+                <div class="text-muted small">Due now</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-6 col-md-3">
+        <div class="card text-center">
+            <div class="card-body py-3">
+                <div class="fs-3 fw-bold text-muted">{{ never_reviewed }}</div>
+                <div class="text-muted small">Never reviewed</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Charts row -->
+<div class="row g-4 mt-3" style="max-width: 700px;">
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-body">
+                <h6 class="card-title text-muted">Ease Factor</h6>
+                <canvas id="efChart" height="200"></canvas>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-body">
+                <h6 class="card-title text-muted">Review Interval</h6>
+                <canvas id="intChart" height="200"></canvas>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Words added over time -->
+<div class="card mt-4" style="max-width: 700px;">
+    <div class="card-body">
+        <h6 class="card-title text-muted">Words Added Over Time</h6>
+        <canvas id="monthChart" height="150"></canvas>
+    </div>
+</div>
+
+<!-- Theme breakdown -->
+<h5 class="mt-4">Themes</h5>
+<div class="list-group" style="max-width: 500px;">
+    {% for t in theme_stats %}
+    <div class="list-group-item d-flex justify-content-between align-items-center">
+        <span>{{ t.name }}</span>
+        <span>
+            <span class="badge bg-secondary rounded-pill">{{ t.count }}</span>
+            {% if t.due > 0 %}
+            <span class="badge bg-warning text-dark rounded-pill ms-1">{{ t.due }} due</span>
+            {% endif %}
+        </span>
+    </div>
+    {% endfor %}
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+<script>
+const barColors = ['#dc3545', '#fd7e14', '#ffc107', '#198754', '#0d6efd'];
+const barOptions = {
+    responsive: true,
+    plugins: { legend: { display: false } },
+    scales: { y: { beginAtZero: true, ticks: { precision: 0 } } }
+};
+
+new Chart(document.getElementById('efChart'), {
+    type: 'bar',
+    data: {
+        labels: {{ ef_labels | safe }},
+        datasets: [{
+            data: {{ ef_data | safe }},
+            backgroundColor: barColors
+        }]
+    },
+    options: barOptions
+});
+
+new Chart(document.getElementById('intChart'), {
+    type: 'bar',
+    data: {
+        labels: {{ int_labels | safe }},
+        datasets: [{
+            data: {{ int_data | safe }},
+            backgroundColor: barColors
+        }]
+    },
+    options: barOptions
+});
+
+new Chart(document.getElementById('monthChart'), {
+    type: 'bar',
+    data: {
+        labels: {{ month_labels | safe }},
+        datasets: [{
+            data: {{ month_data | safe }},
+            backgroundColor: '#0d6efd'
+        }]
+    },
+    options: {
+        responsive: true,
+        plugins: { legend: { display: false } },
+        scales: {
+            y: { beginAtZero: true, ticks: { precision: 0 } },
+            x: { ticks: { maxRotation: 45, autoSkip: true, maxTicksLimit: 12 } }
+        }
+    }
+});
+</script>
+{% endblock %}

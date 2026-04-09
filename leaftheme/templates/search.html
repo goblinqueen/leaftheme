@@ -11,7 +11,7 @@
 <div class="d-flex align-items-center gap-3 mt-4">
     <h2 class="mb-0">{{ query }}</h2>
     {% if query %}
-    <a href="/add_word?word={{ query | urlencode }}" class="btn btn-outline-primary btn-sm">+ Add</a>
+    <a href="/add_word?word={{ query | urlencode }}&redirect_to={{ request.url | urlencode }}" class="btn btn-outline-primary btn-sm">+ Add</a>
     {% endif %}
 </div>
 <ul class="mt-3">

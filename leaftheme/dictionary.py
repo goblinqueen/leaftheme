@@ -51,17 +51,15 @@ class Dictionary:
         def word_count(self):
             return len(self.words)
 
-        def search(self, query):
+        def search(self, query, reverse=False):
             from rapidfuzz import process
-            results = process.extract(
-                query,
-                [str(x) for x in self.words],
-                limit=10,
-                score_cutoff=50)
-            out = []
-            for res in results:
-                out.append((res[1], self.words[res[0]], self.id, self.name))
-            return out
+            words = list(self.words.values())
+            if reverse:
+                candidates = {w.translation: w for w in words}
+            else:
+                candidates = {w.word: w for w in words}
+            results = process.extract(query, list(candidates.keys()), limit=10, score_cutoff=50)
+            return [(res[1], candidates[res[0]], self.id, self.name) for res in results]
 
     class Word:
         _KNOWN_KEYS = {'id', 'uid', 'm', 't', 'dc', 'dm', 'tm', 'ca', 'di', 'dr', 'gcl'}
@@ -281,9 +279,11 @@ class Dictionary:
         return [w for w in words if w.is_due()]
 
     def search(self, query):
+        import re
+        reverse = bool(re.search(r'[А-Яа-яёЁ]', query))
         results = []
-        for theme in self.themes:
-            results += self.themes[theme].search(query)
+        for theme in self.themes.values():
+            results += theme.search(query, reverse=reverse)
         return sorted(results, reverse=True)[:10]
 
 

@@ -173,6 +173,7 @@ def add_word():
         theme_id = int(flask.request.form['theme_id'])
         word_str = flask.request.form['word'].strip()
         translation = flask.request.form['translation'].strip()
+        redirect_to = flask.request.form.get('redirect_to', '')
 
         existing = next((w for w in wt_dict.words.values()
                          if w.word.lower() == word_str.lower()), None)
@@ -186,21 +187,26 @@ def add_word():
                                          preselected=theme_id,
                                          prefill_word=word_str,
                                          prefill_translation=translation,
+                                         redirect_to=redirect_to,
                                          error=error)
 
         wt_dict.add_word(theme_id, word_str, translation)
         with open(file_name, 'w', encoding='utf8') as f:
             json.dump(wt_dict.to_dict(), f, ensure_ascii=False, separators=(',', ':'))
         _mark_unsaved()
+        if redirect_to:
+            return flask.redirect(redirect_to)
         return flask.redirect(flask.url_for('get_words', theme_id=theme_id))
 
     preselected = flask.request.args.get('theme_id', type=int)
     prefill_word = flask.request.args.get('word', '')
+    redirect_to = flask.request.args.get('redirect_to', '')
     return flask.render_template('add_word.html',
                                  menu_items=get_menu_items(),
                                  themes=wt_dict.themes.values(),
                                  preselected=preselected,
-                                 prefill_word=prefill_word)
+                                 prefill_word=prefill_word,
+                                 redirect_to=redirect_to)
 
 
 @app.route('/test_extra/<int:word_id>')
@@ -261,7 +267,13 @@ def glosbe_lookup():
     word = flask.request.args.get('word', '').strip()
     if not word:
         return flask.jsonify(error='no word'), 400
-    translator, lang_from, lang_to = _pick_glosbe(word)
+    direction = flask.request.args.get('dir', '')
+    if direction == 'fi-ru':
+        translator, lang_from, lang_to = _glosbe_fi_ru, 'fi', 'ru'
+    elif direction == 'ru-fi':
+        translator, lang_from, lang_to = _glosbe_ru_fi, 'ru', 'fi'
+    else:
+        translator, lang_from, lang_to = _pick_glosbe(word)
     translation = translator.translate(word)
     return flask.jsonify(translation=translation, lang_from=lang_from, lang_to=lang_to)
 
@@ -491,6 +503,92 @@ def _save_dictionary(wt_dict, file_name):
     _mark_unsaved()
 
 
+@app.route('/stats')
+def stats():
+    wt_dict, file_name = _load_dictionary()
+    if wt_dict is None:
+        return flask.redirect('load_dictionary')
+
+    from datetime import datetime, timezone
+    from collections import Counter
+
+    all_words = list(wt_dict.words.values())
+    total_words = len(all_words)
+    total_themes = len(wt_dict.themes)
+
+    # Due / reviewed / never reviewed
+    due_words = [w for w in all_words if w.is_due()]
+    reviewed_words = [w for w in all_words if w.review_date is not None]
+    never_reviewed = total_words - len(reviewed_words)
+
+    # Ease factor distribution
+    ef_buckets = Counter()
+    for w in reviewed_words:
+        ef = w.ease_factor / 100
+        if ef < 1.5:
+            ef_buckets['< 1.5'] += 1
+        elif ef < 2.0:
+            ef_buckets['1.5 – 2.0'] += 1
+        elif ef < 2.5:
+            ef_buckets['2.0 – 2.5'] += 1
+        elif ef < 3.0:
+            ef_buckets['2.5 – 3.0'] += 1
+        else:
+            ef_buckets['>= 3.0'] += 1
+
+    ef_labels = ['< 1.5', '1.5 – 2.0', '2.0 – 2.5', '2.5 – 3.0', '>= 3.0']
+    ef_data = [ef_buckets.get(l, 0) for l in ef_labels]
+
+    # Interval distribution
+    int_buckets = Counter()
+    for w in reviewed_words:
+        days = w.interval_days
+        if days <= 1:
+            int_buckets['1 day'] += 1
+        elif days <= 7:
+            int_buckets['2–7 days'] += 1
+        elif days <= 30:
+            int_buckets['8–30 days'] += 1
+        elif days <= 90:
+            int_buckets['1–3 months'] += 1
+        else:
+            int_buckets['3+ months'] += 1
+
+    int_labels = ['1 day', '2–7 days', '8–30 days', '1–3 months', '3+ months']
+    int_data = [int_buckets.get(l, 0) for l in int_labels]
+
+    # Theme breakdown
+    theme_stats = []
+    for t in sorted(wt_dict.themes.values(), key=lambda t: t.word_count(), reverse=True):
+        count = t.word_count()
+        theme_due = len(wt_dict.due_words(t.id))
+        theme_stats.append({'name': t.name, 'count': count, 'due': theme_due})
+
+    # Words added per month (from created_date)
+    month_counts = Counter()
+    for w in all_words:
+        if w.created_date:
+            month_counts[w.created_date[:7]] += 1  # YYYY-MM
+    months_sorted = sorted(month_counts.keys())
+    month_labels = months_sorted
+    month_data = [month_counts[m] for m in months_sorted]
+
+    return flask.render_template('stats.html',
+                                 menu_items=get_menu_items(),
+                                 total_words=total_words,
+                                 total_themes=total_themes,
+                                 due_count=len(due_words),
+                                 reviewed_count=len(reviewed_words),
+                                 never_reviewed=never_reviewed,
+                                 ef_labels=json.dumps(ef_labels),
+                                 ef_data=json.dumps(ef_data),
+                                 int_labels=json.dumps(int_labels),
+                                 int_data=json.dumps(int_data),
+                                 theme_stats=theme_stats,
+                                 month_labels=json.dumps(month_labels),
+                                 month_data=json.dumps(month_data))
+
+
 @app.route('/save_dictionary')
 def save_dictionary():
     if 'credentials' not in flask.session:
@@ -709,6 +807,7 @@ def get_menu_items():
         out.append(('Search', "/search"))
         out.append(('Add Word', "/add_word"))
         out.append(('Review', "/review"))
+        out.append(('Stats', "/stats"))
     else:
         out.append(("Load Dictionary", "/load_dictionary"))
     out.append(("Logout", "/clear"))

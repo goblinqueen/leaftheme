@@ -23,6 +23,7 @@
             </button>
             <a id="glosbe-link" href="#" target="_blank" class="btn btn-outline-secondary d-none">↗</a>
         </div>
+        <div id="glosbe-warning" class="text-warning small d-none">No translation found.</div>
     </div>
     <div class="mb-2">
         <label class="form-label small text-muted mb-1">Theme</label>
@@ -32,6 +33,7 @@
             {% endfor %}
         </select>
     </div>
+    <input type="hidden" name="redirect_to" value="{{ redirect_to or '' }}">
     <button type="submit" class="btn btn-primary btn-sm">Add</button>
 </form>
 
@@ -47,16 +49,18 @@ document.getElementById('btn-glosbe').addEventListener('click', () => {
     label.classList.add('d-none');
     spinner.classList.remove('d-none');
 
-    fetch('/glosbe?word=' + encodeURIComponent(word))
+    fetch('/glosbe?word=' + encodeURIComponent(word) + '&dir=fi-ru')
         .then(r => r.json())
         .then(data => {
+            const warning = document.getElementById('glosbe-warning');
             if (data.translation) {
                 document.getElementById('translation-input').value = data.translation;
+                warning.classList.add('d-none');
             } else {
-                alert('No translation found.');
+                warning.classList.remove('d-none');
             }
             const link = document.getElementById('glosbe-link');
-            link.href = `https://glosbe.com/${data.lang_from}/${data.lang_to}/` + encodeURIComponent(word);
+            link.href = 'https://glosbe.com/fi/ru/' + encodeURIComponent(word);
             link.classList.remove('d-none');
         })
         .catch(() => alert('Glosbe fetch failed.'))
