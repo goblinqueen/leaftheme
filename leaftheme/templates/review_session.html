@@ -39,6 +39,7 @@
 document.addEventListener('DOMContentLoaded', () => {
     const words = JSON.parse(document.getElementById('words-data').textContent);
     const themeId = {{ theme_id | tojson }};
+    const direction = {{ (direction or 'forward') | tojson }};
     let currentIndex = 0;
     const results = {};
 
@@ -58,7 +59,7 @@ document.addEventListener('DOMContentLoaded', () => {
     function showWord(revealed = false) {
         const w = words[currentIndex];
         wordDisplay.textContent = w.word;
-        wordDisplay.href = '/word/' + w.id;
+        wordDisplay.href = '/word/' + w.word_id;
         translationDisplay.textContent = w.translation;
         if (revealed) {
             revealArea.classList.add('d-none');
@@ -136,7 +137,7 @@ document.addEventListener('DOMContentLoaded', () => {
         fetch('/review/apply', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({results: results, theme_id: themeId})
+            body: JSON.stringify({results: results, theme_id: themeId, direction: direction})
         })
         .then(r => r.json())
         .then(data => { window.location.href = data.redirect; });

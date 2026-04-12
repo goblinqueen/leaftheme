@@ -113,9 +113,11 @@ class Dictionary:
             due = _parse_iso(self.review_date)
             return datetime.now(timezone.utc) >= due
 
-        def sm2_review(self, quality):
-            """Apply SM-2 algorithm. quality: 0=fail, 1=hard, 2=good, 3=easy.
+        @staticmethod
+        def sm2_calculate(ease_x100, repetitions, interval_days, quality):
+            """Pure SM-2 calculation. Returns (new_ease_x100, new_reps, new_interval, new_review_date_iso).
 
+            quality: 0=fail, 1=hard, 2=good, 3=easy.
             Maps our 0-3 scale to SM-2's 0-5 scale:
               0 (fail)  → SM-2 grade 1
               1 (hard)  → SM-2 grade 3
@@ -125,9 +127,9 @@ class Dictionary:
             grade_map = {0: 1, 1: 3, 2: 4, 3: 5}
             grade = grade_map.get(quality, 1)
 
-            ef = self.ease_factor / 100.0
-            reps = self.repetitions
-            interval = self.interval_days
+            ef = ease_x100 / 100.0 if ease_x100 and ease_x100 >= 130 else 2.5
+            reps = repetitions or 0
+            interval = interval_days or 0
 
             if grade >= 3:  # pass
                 if reps == 0:
@@ -146,10 +148,12 @@ class Dictionary:
             if ef < 1.3:
                 ef = 1.3
 
-            self.score = round(ef * 100)
-            self.correct_answers = reps
-            self.review_interval = interval
-            self.review_date = _future_iso(interval)
+            return round(ef * 100), reps, interval, _future_iso(interval)
+
+        def sm2_review(self, quality):
+            """Apply SM-2 algorithm to this word."""
+            self.score, self.correct_answers, self.review_interval, self.review_date = \
+                self.sm2_calculate(self.ease_factor, self.repetitions, self.interval_days, quality)
             self.modified_date = _now_iso()
 
         def __eq__(self, other):
