@@ -21,19 +21,45 @@
             </div>
         </div>
     </div>
-    <div class="col-6 col-md-3">
-        <div class="card text-center">
-            <div class="card-body py-3">
-                <div class="fs-3 fw-bold text-warning">{{ due_count }}</div>
-                <div class="text-muted small">Due now</div>
+</div>
+
+<!-- Direction stats -->
+<div class="row g-3 mt-2" style="max-width: 700px;">
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-body">
+                <h6 class="card-title text-muted">Fi &rarr; Ru</h6>
+                <div class="d-flex justify-content-between">
+                    <span>Due now</span>
+                    <span class="fw-bold text-warning">{{ fwd_due }}</span>
+                </div>
+                <div class="d-flex justify-content-between">
+                    <span>Reviewed</span>
+                    <span class="fw-bold">{{ fwd_reviewed }}</span>
+                </div>
+                <div class="d-flex justify-content-between">
+                    <span>Never reviewed</span>
+                    <span class="fw-bold text-muted">{{ fwd_never }}</span>
+                </div>
             </div>
         </div>
     </div>
-    <div class="col-6 col-md-3">
-        <div class="card text-center">
-            <div class="card-body py-3">
-                <div class="fs-3 fw-bold text-muted">{{ never_reviewed }}</div>
-                <div class="text-muted small">Never reviewed</div>
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-body">
+                <h6 class="card-title text-muted">Ru &rarr; Fi</h6>
+                <div class="d-flex justify-content-between">
+                    <span>Due now</span>
+                    <span class="fw-bold text-warning">{{ rev_due }}</span>
+                </div>
+                <div class="d-flex justify-content-between">
+                    <span>Reviewed</span>
+                    <span class="fw-bold">{{ rev_reviewed }}</span>
+                </div>
+                <div class="d-flex justify-content-between">
+                    <span>Never reviewed</span>
+                    <span class="fw-bold text-muted">{{ rev_never }}</span>
+                </div>
             </div>
         </div>
     </div>
@@ -69,14 +95,17 @@
 
 <!-- Theme breakdown -->
 <h5 class="mt-4">Themes</h5>
-<div class="list-group" style="max-width: 500px;">
+<div class="list-group" style="max-width: 600px;">
     {% for t in theme_stats %}
     <div class="list-group-item d-flex justify-content-between align-items-center">
         <span>{{ t.name }}</span>
         <span>
             <span class="badge bg-secondary rounded-pill">{{ t.count }}</span>
-            {% if t.due > 0 %}
-            <span class="badge bg-warning text-dark rounded-pill ms-1">{{ t.due }} due</span>
+            {% if t.fwd_due > 0 %}
+            <span class="badge bg-primary rounded-pill ms-1">Fi {{ t.fwd_due }}</span>
+            {% endif %}
+            {% if t.rev_due > 0 %}
+            <span class="badge bg-info rounded-pill ms-1">Ru {{ t.rev_due }}</span>
             {% endif %}
         </span>
     </div>
@@ -85,10 +114,9 @@
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
 <script>
-const barColors = ['#dc3545', '#fd7e14', '#ffc107', '#198754', '#0d6efd'];
 const barOptions = {
     responsive: true,
-    plugins: { legend: { display: false } },
+    plugins: { legend: { display: true, position: 'bottom' } },
     scales: { y: { beginAtZero: true, ticks: { precision: 0 } } }
 };
 
@@ -96,10 +124,10 @@ new Chart(document.getElementById('efChart'), {
     type: 'bar',
     data: {
         labels: {{ ef_labels | safe }},
-        datasets: [{
-            data: {{ ef_data | safe }},
-            backgroundColor: barColors
-        }]
+        datasets: [
+            { label: 'Fi\u2192Ru', data: {{ fwd_ef_data | safe }}, backgroundColor: '#0d6efd' },
+            { label: 'Ru\u2192Fi', data: {{ rev_ef_data | safe }}, backgroundColor: '#0dcaf0' }
+        ]
     },
     options: barOptions
 });
@@ -108,10 +136,10 @@ new Chart(document.getElementById('intChart'), {
     type: 'bar',
     data: {
         labels: {{ int_labels | safe }},
-        datasets: [{
-            data: {{ int_data | safe }},
-            backgroundColor: barColors
-        }]
+        datasets: [
+            { label: 'Fi\u2192Ru', data: {{ fwd_int_data | safe }}, backgroundColor: '#0d6efd' },
+            { label: 'Ru\u2192Fi', data: {{ rev_int_data | safe }}, backgroundColor: '#0dcaf0' }
+        ]
     },
     options: barOptions
 });
