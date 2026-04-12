@@ -629,62 +629,69 @@ def stats():
     lt_data = _load_leaftheme()
     _migrate_forward_srs(wt_dict, lt_data)
     fwd_srs = lt_data.get('forward_srs', {})
+    rev_srs = lt_data.get('reverse_srs', {})
 
     all_words = list(wt_dict.words.values())
     total_words = len(all_words)
     total_themes = len(wt_dict.themes)
 
-    # Due / reviewed / never reviewed (from leaftheme.json)
-    due_words = _srs_due_words(wt_dict, lt_data, 'forward_srs')
-    reviewed_uids = {uid for uid, e in fwd_srs.items() if e.get('dr') is not None}
-    reviewed_count = sum(1 for w in all_words if w.uid in reviewed_uids)
-    never_reviewed = total_words - reviewed_count
+    # Due / reviewed / never reviewed — forward (from leaftheme.json)
+    fwd_due = _srs_due_words(wt_dict, lt_data, 'forward_srs')
+    fwd_reviewed_uids = {uid for uid, e in fwd_srs.items() if e.get('dr') is not None}
+    fwd_reviewed_count = sum(1 for w in all_words if w.uid in fwd_reviewed_uids)
+    fwd_never_reviewed = total_words - fwd_reviewed_count
 
-    # Ease factor distribution
-    ef_buckets = Counter()
-    for uid in reviewed_uids:
-        entry = fwd_srs[uid]
-        tm = entry.get('tm', 0)
-        ef = (tm / 100) if tm and tm >= 130 else 2.5
-        if ef < 1.5:
-            ef_buckets['< 1.5'] += 1
-        elif ef < 2.0:
-            ef_buckets['1.5 – 2.0'] += 1
-        elif ef < 2.5:
-            ef_buckets['2.0 – 2.5'] += 1
-        elif ef < 3.0:
-            ef_buckets['2.5 – 3.0'] += 1
-        else:
-            ef_buckets['>= 3.0'] += 1
+    # Due / reviewed / never reviewed — reverse
+    rev_due = _srs_due_words(wt_dict, lt_data, 'reverse_srs')
+    rev_reviewed_uids = {uid for uid, e in rev_srs.items() if e.get('dr') is not None}
+    rev_reviewed_count = sum(1 for w in all_words if w.uid in rev_reviewed_uids)
+    rev_never_reviewed = total_words - rev_reviewed_count
+
+    def _srs_distributions(srs, reviewed_uids):
+        ef_buckets = Counter()
+        int_buckets = Counter()
+        for uid in reviewed_uids:
+            entry = srs[uid]
+            tm = entry.get('tm', 0)
+            ef = (tm / 100) if tm and tm >= 130 else 2.5
+            if ef < 1.5:
+                ef_buckets['< 1.5'] += 1
+            elif ef < 2.0:
+                ef_buckets['1.5 – 2.0'] += 1
+            elif ef < 2.5:
+                ef_buckets['2.0 – 2.5'] += 1
+            elif ef < 3.0:
+                ef_buckets['2.5 – 3.0'] += 1
+            else:
+                ef_buckets['>= 3.0'] += 1
+
+            days = entry.get('di') or 0
+            if days <= 1:
+                int_buckets['1 day'] += 1
+            elif days <= 7:
+                int_buckets['2–7 days'] += 1
+            elif days <= 30:
+                int_buckets['8–30 days'] += 1
+            elif days <= 90:
+                int_buckets['1–3 months'] += 1
+            else:
+                int_buckets['3+ months'] += 1
+        return ef_buckets, int_buckets
 
     ef_labels = ['< 1.5', '1.5 – 2.0', '2.0 – 2.5', '2.5 – 3.0', '>= 3.0']
-    ef_data = [ef_buckets.get(l, 0) for l in ef_labels]
-
-    # Interval distribution
-    int_buckets = Counter()
-    for uid in reviewed_uids:
-        entry = fwd_srs[uid]
-        days = entry.get('di') or 0
-        if days <= 1:
-            int_buckets['1 day'] += 1
-        elif days <= 7:
-            int_buckets['2–7 days'] += 1
-        elif days <= 30:
-            int_buckets['8–30 days'] += 1
-        elif days <= 90:
-            int_buckets['1–3 months'] += 1
-        else:
-            int_buckets['3+ months'] += 1
-
     int_labels = ['1 day', '2–7 days', '8–30 days', '1–3 months', '3+ months']
-    int_data = [int_buckets.get(l, 0) for l in int_labels]
+
+    fwd_ef, fwd_int = _srs_distributions(fwd_srs, fwd_reviewed_uids)
+    rev_ef, rev_int = _srs_distributions(rev_srs, rev_reviewed_uids)
 
     # Theme breakdown
     theme_stats = []
     for t in sorted(wt_dict.themes.values(), key=lambda t: t.word_count(), reverse=True):
         count = t.word_count()
-        theme_due = len(_srs_due_words(wt_dict, lt_data, 'forward_srs', t.id))
-        theme_stats.append({'name': t.name, 'count': count, 'due': theme_due})
+        fwd_theme_due = len(_srs_due_words(wt_dict, lt_data, 'forward_srs', t.id))
+        rev_theme_due = len(_srs_due_words(wt_dict, lt_data, 'reverse_srs', t.id))
+        theme_stats.append({'name': t.name, 'count': count,
+                            'fwd_due': fwd_theme_due, 'rev_due': rev_theme_due})
 
     # Words added per month (from created_date)
     month_counts = Counter()
@@ -699,13 +706,18 @@ def stats():
                                  menu_items=get_menu_items(),
                                  total_words=total_words,
                                  total_themes=total_themes,
-                                 due_count=len(due_words),
-                                 reviewed_count=reviewed_count,
-                                 never_reviewed=never_reviewed,
+                                 fwd_due=len(fwd_due),
+                                 fwd_reviewed=fwd_reviewed_count,
+                                 fwd_never=fwd_never_reviewed,
+                                 rev_due=len(rev_due),
+                                 rev_reviewed=rev_reviewed_count,
+                                 rev_never=rev_never_reviewed,
                                  ef_labels=json.dumps(ef_labels),
-                                 ef_data=json.dumps(ef_data),
+                                 fwd_ef_data=json.dumps([fwd_ef.get(l, 0) for l in ef_labels]),
+                                 rev_ef_data=json.dumps([rev_ef.get(l, 0) for l in ef_labels]),
                                  int_labels=json.dumps(int_labels),
-                                 int_data=json.dumps(int_data),
+                                 fwd_int_data=json.dumps([fwd_int.get(l, 0) for l in int_labels]),
+                                 rev_int_data=json.dumps([rev_int.get(l, 0) for l in int_labels]),
                                  theme_stats=theme_stats,
                                  month_labels=json.dumps(month_labels),
                                  month_data=json.dumps(month_data))
