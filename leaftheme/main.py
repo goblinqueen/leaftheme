@@ -31,6 +31,8 @@ def _pick_glosbe(word):
 PROJECT_ID = "goblin-queendom"
 
 DICTIONARY_FILE_NAME = 'dictionary.txt'
+LEAFTHEME_FILE_NAME = 'leaftheme.json'
+EMPTY_LEAFTHEME = {"version": 1, "forward_srs": {}, "reverse_srs": {}}
 
 SCOPES = ['https://www.googleapis.com/auth/drive.metadata.readonly',
           'https://www.googleapis.com/auth/drive.file',
@@ -105,6 +107,7 @@ def load_dictionary():
                     dict_file = child_item
 
         flask.session['dict_file_id'] = dict_file['id']
+        flask.session['wt_folder_id'] = wt_folders[0]['id']
 
         request = drive.files().get_media(fileId=dict_file['id'])
         file = io.BytesIO()
@@ -118,6 +121,28 @@ def load_dictionary():
             f.write(file.getvalue())
         with zipfile.ZipFile(file_name, 'r') as zip_file:
             zip_file.extract(DICTIONARY_FILE_NAME, flask.session['file_name'])
+
+        # Download leaftheme.json (reverse SRS data) from same folder
+        lt_query = ("name = 'leaftheme.json'"
+                    " and '{}' in parents"
+                    " and trashed=false".format(wt_folders[0]['id']))
+        lt_results = drive.files().list(q=lt_query, fields=fields).execute()
+        lt_files = lt_results.get("files", [])
+        lt_path = os.path.join(flask.session['file_name'], LEAFTHEME_FILE_NAME)
+        if lt_files:
+            flask.session['leaftheme_file_id'] = lt_files[0]['id']
+            lt_request = drive.files().get_media(fileId=lt_files[0]['id'])
+            lt_buf = io.BytesIO()
+            lt_dl = googleapiclient.http.MediaIoBaseDownload(lt_buf, lt_request)
+            lt_done = False
+            while not lt_done:
+                _, lt_done = lt_dl.next_chunk()
+            with open(lt_path, 'wb') as f:
+                f.write(lt_buf.getvalue())
+        else:
+            flask.session['leaftheme_file_id'] = None
+            with open(lt_path, 'w', encoding='utf-8') as f:
+                json.dump(EMPTY_LEAFTHEME, f)
 
     except RefreshError:
         return flask.redirect(flask.url_for('clear_credentials'))
@@ -399,18 +424,25 @@ def review_pick():
     if wt_dict is None:
         return flask.redirect('load_dictionary')
 
-    # Count due words per theme + total
+    lt_data = _load_leaftheme()
+    _migrate_forward_srs(wt_dict, lt_data)
+
+    # Count due words per theme + total (both directions)
     theme_counts = []
-    total_due = 0
+    total_fwd = 0
+    total_rev = 0
     for t in wt_dict.themes.values():
-        due = len(wt_dict.due_words(t.id))
-        theme_counts.append((t, due))
-        total_due += due
+        fwd = len(_srs_due_words(wt_dict, lt_data, 'forward_srs', t.id))
+        rev = len(_srs_due_words(wt_dict, lt_data, 'reverse_srs', t.id))
+        theme_counts.append((t, fwd, rev))
+        total_fwd += fwd
+        total_rev += rev
 
     return flask.render_template('review_pick.html',
                                  menu_items=get_menu_items(),
                                  theme_counts=theme_counts,
-                                 total_due=total_due)
+                                 total_fwd=total_fwd,
+                                 total_rev=total_rev)
 
 
 @app.route('/review/start')
@@ -420,7 +452,12 @@ def review_start():
         return flask.redirect('load_dictionary')
 
     theme_id = flask.request.args.get('theme_id', type=int)
-    due = wt_dict.due_words(theme_id)
+    direction = flask.request.args.get('direction', 'forward')
+    srs_key = 'reverse_srs' if direction == 'reverse' else 'forward_srs'
+
+    lt_data = _load_leaftheme()
+    _migrate_forward_srs(wt_dict, lt_data)
+    due = _srs_due_words(wt_dict, lt_data, srs_key, theme_id)
 
     if not due:
         return flask.render_template('review_done.html',
@@ -428,39 +465,43 @@ def review_start():
                                      reviewed=0, theme_id=theme_id)
 
     batch = random.sample(due, min(REVIEW_BATCH_SIZE, len(due)))
-    words_list = [{'id': w.id, 'word': w.word, 'translation': w.translation} for w in batch]
+    if direction == 'reverse':
+        words_list = [{'id': w.uid, 'word_id': w.id,
+                       'word': w.translation, 'translation': w.word} for w in batch]
+    else:
+        words_list = [{'id': w.uid, 'word_id': w.id,
+                       'word': w.word, 'translation': w.translation} for w in batch]
     words_json = json.dumps(words_list, ensure_ascii=False)
 
     return flask.render_template('review_session.html',
                                  menu_items=get_menu_items(),
                                  words_json=words_json,
                                  theme_id=theme_id,
-                                 total_due=len(due))
+                                 total_due=len(due),
+                                 direction=direction)
 
 
 @app.route('/review/apply', methods=['POST'])
 def review_apply():
-    """Apply SM-2 ratings to reviewed words."""
+    """Apply SM-2 ratings (uid-keyed, both directions stored in leaftheme.json)."""
     data = flask.request.get_json()
-    results = data.get('results', {})  # {word_id_str: quality}
+    results = data.get('results', {})  # {word_uid: quality}
     theme_id = data.get('theme_id')
+    direction = data.get('direction', 'forward')
+    srs_key = 'reverse_srs' if direction == 'reverse' else 'forward_srs'
 
-    wt_dict, file_name = _load_dictionary()
-    if wt_dict is None:
-        return flask.jsonify(status='error', message='No dictionary'), 400
+    lt_data = _load_leaftheme()
 
-    for word_id_str, quality in results.items():
-        word_id = int(word_id_str)
-        if word_id in wt_dict.words:
-            wt_dict.words[word_id].sm2_review(quality)
+    for uid, quality in results.items():
+        _apply_srs(lt_data, srs_key, uid, quality)
 
-    _save_dictionary(wt_dict, file_name)
+    _save_leaftheme(lt_data)
 
+    redirect_args = {'direction': direction}
     if theme_id is not None:
-        redirect = flask.url_for('review_start', theme_id=theme_id)
-    else:
-        redirect = flask.url_for('review_start')
-    return flask.jsonify(status='ok', reviewed=len(results), redirect=redirect)
+        redirect_args['theme_id'] = theme_id
+    return flask.jsonify(status='ok', reviewed=len(results),
+                         redirect=flask.url_for('review_start', **redirect_args))
 
 
 def _load_dictionary():
@@ -470,6 +511,79 @@ def _load_dictionary():
         return None, file_name
     with open(file_name, encoding="utf8") as f:
         return dictionary.Dictionary(json.load(f)), file_name
+
+
+def _load_leaftheme():
+    """Load leaftheme.json from session dir. Migrates forward SRS from .wt on first load."""
+    session_dir = flask.session.get('file_name')
+    if not session_dir:
+        return dict(EMPTY_LEAFTHEME)
+    lt_path = os.path.join(session_dir, LEAFTHEME_FILE_NAME)
+    if not os.path.exists(lt_path):
+        return dict(EMPTY_LEAFTHEME)
+    with open(lt_path, encoding='utf-8') as f:
+        data = json.load(f)
+    # Ensure both keys exist (upgrade from older format)
+    data.setdefault('forward_srs', {})
+    data.setdefault('reverse_srs', {})
+    return data
+
+
+def _save_leaftheme(data):
+    """Write leaftheme.json to session dir and mark unsaved."""
+    session_dir = flask.session.get('file_name')
+    if not session_dir:
+        return
+    lt_path = os.path.join(session_dir, LEAFTHEME_FILE_NAME)
+    with open(lt_path, 'w', encoding='utf-8') as f:
+        json.dump(data, f, ensure_ascii=False)
+    _mark_unsaved()
+
+
+def _migrate_forward_srs(wt_dict, lt_data):
+    """Import SM-2 data from .wt words into forward_srs (one-time migration)."""
+    if lt_data.get('forward_srs'):
+        return  # already has data
+    fwd = {}
+    for w in wt_dict.words.values():
+        if w.review_date is not None or (w.score and w.score >= 130):
+            fwd[w.uid] = {
+                'tm': w.score if w.score and w.score >= 130 else 0,
+                'ca': w.correct_answers,
+                'di': w.review_interval,
+                'dr': w.review_date,
+            }
+    if fwd:
+        lt_data['forward_srs'] = fwd
+
+
+def _srs_due_words(wt_dict, lt_data, srs_key, theme_id=None):
+    """Return Word objects due for review in the given SRS direction."""
+    from datetime import datetime, timezone
+    srs = lt_data.get(srs_key, {})
+    if theme_id is not None and theme_id in wt_dict.themes:
+        words = wt_dict.themes[theme_id].words.values()
+    else:
+        words = wt_dict.words.values()
+    due = []
+    for w in words:
+        entry = srs.get(w.uid)
+        if entry is None or entry.get('dr') is None:
+            due.append(w)
+        else:
+            dr = dictionary._parse_iso(entry['dr'])
+            if datetime.now(timezone.utc) >= dr:
+                due.append(w)
+    return due
+
+
+def _apply_srs(lt_data, srs_key, uid, quality):
+    """Apply SM-2 to an SRS entry in the given direction, creating it if needed."""
+    srs = lt_data.setdefault(srs_key, {})
+    entry = srs.get(uid, {})
+    new_ease, new_reps, new_interval, new_dr = dictionary.Dictionary.Word.sm2_calculate(
+        entry.get('tm', 0), entry.get('ca'), entry.get('di'), quality)
+    srs[uid] = {'tm': new_ease, 'ca': new_reps, 'di': new_interval, 'dr': new_dr}
 
 
 UNSAVED_MARKER = '_UNSAVED_'
@@ -512,19 +626,26 @@ def stats():
     from datetime import datetime, timezone
     from collections import Counter
 
+    lt_data = _load_leaftheme()
+    _migrate_forward_srs(wt_dict, lt_data)
+    fwd_srs = lt_data.get('forward_srs', {})
+
     all_words = list(wt_dict.words.values())
     total_words = len(all_words)
     total_themes = len(wt_dict.themes)
 
-    # Due / reviewed / never reviewed
-    due_words = [w for w in all_words if w.is_due()]
-    reviewed_words = [w for w in all_words if w.review_date is not None]
-    never_reviewed = total_words - len(reviewed_words)
+    # Due / reviewed / never reviewed (from leaftheme.json)
+    due_words = _srs_due_words(wt_dict, lt_data, 'forward_srs')
+    reviewed_uids = {uid for uid, e in fwd_srs.items() if e.get('dr') is not None}
+    reviewed_count = sum(1 for w in all_words if w.uid in reviewed_uids)
+    never_reviewed = total_words - reviewed_count
 
     # Ease factor distribution
     ef_buckets = Counter()
-    for w in reviewed_words:
-        ef = w.ease_factor / 100
+    for uid in reviewed_uids:
+        entry = fwd_srs[uid]
+        tm = entry.get('tm', 0)
+        ef = (tm / 100) if tm and tm >= 130 else 2.5
         if ef < 1.5:
             ef_buckets['< 1.5'] += 1
         elif ef < 2.0:
@@ -541,8 +662,9 @@ def stats():
 
     # Interval distribution
     int_buckets = Counter()
-    for w in reviewed_words:
-        days = w.interval_days
+    for uid in reviewed_uids:
+        entry = fwd_srs[uid]
+        days = entry.get('di') or 0
         if days <= 1:
             int_buckets['1 day'] += 1
         elif days <= 7:
@@ -561,7 +683,7 @@ def stats():
     theme_stats = []
     for t in sorted(wt_dict.themes.values(), key=lambda t: t.word_count(), reverse=True):
         count = t.word_count()
-        theme_due = len(wt_dict.due_words(t.id))
+        theme_due = len(_srs_due_words(wt_dict, lt_data, 'forward_srs', t.id))
         theme_stats.append({'name': t.name, 'count': count, 'due': theme_due})
 
     # Words added per month (from created_date)
@@ -578,7 +700,7 @@ def stats():
                                  total_words=total_words,
                                  total_themes=total_themes,
                                  due_count=len(due_words),
-                                 reviewed_count=len(reviewed_words),
+                                 reviewed_count=reviewed_count,
                                  never_reviewed=never_reviewed,
                                  ef_labels=json.dumps(ef_labels),
                                  ef_data=json.dumps(ef_data),
@@ -608,6 +730,12 @@ def save_dictionary():
         save_dictionary_to_drive(
             flask.session['credentials'],
             flask.session['dict_file_id'],
+            flask.session['file_name']
+        )
+        save_leaftheme_to_drive(
+            flask.session['credentials'],
+            flask.session.get('leaftheme_file_id'),
+            flask.session.get('wt_folder_id'),
             flask.session['file_name']
         )
     except RefreshError:
@@ -793,6 +921,28 @@ def save_dictionary_to_drive(credentials_dict, file_id, session_dir):
     drive = build(API_SERVICE_NAME, API_VERSION, credentials=credentials)
     media = googleapiclient.http.MediaIoBaseUpload(upload_buf, mimetype='application/zip')
     drive.files().update(fileId=file_id, media_body=media).execute()
+
+
+def save_leaftheme_to_drive(credentials_dict, file_id, folder_id, session_dir):
+    """Upload leaftheme.json to Drive (create if new, update if exists)."""
+    lt_path = os.path.join(session_dir, LEAFTHEME_FILE_NAME)
+    if not os.path.exists(lt_path):
+        return
+
+    with open(lt_path, encoding='utf-8') as f:
+        lt_bytes = f.read().encode('utf-8')
+
+    credentials = google.oauth2.credentials.Credentials(**credentials_dict)
+    drive = build(API_SERVICE_NAME, API_VERSION, credentials=credentials)
+    media = googleapiclient.http.MediaIoBaseUpload(
+        io.BytesIO(lt_bytes), mimetype='application/json')
+
+    if file_id:
+        drive.files().update(fileId=file_id, media_body=media).execute()
+    elif folder_id:
+        metadata = {'name': LEAFTHEME_FILE_NAME, 'parents': [folder_id]}
+        result = drive.files().create(body=metadata, media_body=media).execute()
+        flask.session['leaftheme_file_id'] = result['id']
 
 
 def get_menu_items():

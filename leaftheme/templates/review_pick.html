@@ -2,17 +2,26 @@
 
 {% block content %}
 <h2 class="mt-4">Review</h2>
-<p class="text-muted">{{ total_due }} words due for review.</p>
 
-<a href="/review/start" class="btn btn-primary mb-4">Review All ({{ total_due }})</a>
+<div class="d-flex gap-2 mb-4">
+    <a href="/review/start" class="btn btn-primary">Fi &rarr; Ru ({{ total_fwd }})</a>
+    <a href="/review/start?direction=reverse" class="btn btn-outline-primary">Ru &rarr; Fi ({{ total_rev }})</a>
+</div>
 
-<ul class="list-group" style="max-width: 500px;">
-    {% for theme, due in theme_counts %}
-    {% if due > 0 %}
-    <a href="/review/start?theme_id={{ theme.id }}" class="list-group-item list-group-item-action d-flex justify-content-between align-items-center">
-        {{ theme.name }}
-        <span class="badge bg-primary rounded-pill">{{ due }}</span>
-    </a>
+<ul class="list-group" style="max-width: 600px;">
+    {% for theme, fwd, rev in theme_counts %}
+    {% if fwd > 0 or rev > 0 %}
+    <li class="list-group-item d-flex justify-content-between align-items-center">
+        <span>{{ theme.name }}</span>
+        <span>
+            {% if fwd > 0 %}
+            <a href="/review/start?theme_id={{ theme.id }}" class="badge bg-primary rounded-pill text-decoration-none">Fi&rarr;Ru {{ fwd }}</a>
+            {% endif %}
+            {% if rev > 0 %}
+            <a href="/review/start?theme_id={{ theme.id }}&direction=reverse" class="badge bg-info rounded-pill text-decoration-none">Ru&rarr;Fi {{ rev }}</a>
+            {% endif %}
+        </span>
+    </li>
     {% endif %}
     {% endfor %}
 </ul>
