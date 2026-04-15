@@ -3,6 +3,29 @@
 {% block content %}
 <h2 class="mt-4">Statistics</h2>
 
+<!-- Learning flow pipeline -->
+<h5 class="mt-3">Learning Flow</h5>
+<div class="d-flex mb-1" style="max-width: 700px; height: 36px;">
+    {% for stage in flow_stats %}
+    {% if stage.count > 0 %}
+    <div class="{{ stage.badge }} d-flex align-items-center justify-content-center"
+         style="flex: {{ stage.count }}; min-width: 40px; {% if loop.first %}border-radius: 6px 0 0 6px;{% elif loop.last %}border-radius: 0 6px 6px 0;{% endif %}"
+         title="{{ stage.label }}: {{ stage.count }}">
+        <span class="fw-bold small">{{ stage.count }}</span>
+    </div>
+    {% endif %}
+    {% endfor %}
+</div>
+<div class="d-flex mb-3" style="max-width: 700px;">
+    {% for stage in flow_stats %}
+    {% if stage.count > 0 %}
+    <div style="flex: {{ stage.count }}; min-width: 40px;" class="text-center">
+        <small class="text-muted">{{ stage.label }}</small>
+    </div>
+    {% endif %}
+    {% endfor %}
+</div>
+
 <!-- Summary cards -->
 <div class="row g-3 mt-2" style="max-width: 700px;">
     <div class="col-6 col-md-3">
@@ -28,7 +51,7 @@
     <div class="col-md-6">
         <div class="card">
             <div class="card-body">
-                <h6 class="card-title text-muted">Fi &rarr; Ru</h6>
+                <h6 class="card-title text-muted">Fi &rarr; Ru <small>(Heaven)</small></h6>
                 <div class="d-flex justify-content-between">
                     <span>Due now</span>
                     <span class="fw-bold text-warning">{{ fwd_due }}</span>
@@ -47,7 +70,7 @@
     <div class="col-md-6">
         <div class="card">
             <div class="card-body">
-                <h6 class="card-title text-muted">Ru &rarr; Fi</h6>
+                <h6 class="card-title text-muted">Ru &rarr; Fi <small>(Heaven)</small></h6>
                 <div class="d-flex justify-content-between">
                     <span>Due now</span>
                     <span class="fw-bold text-warning">{{ rev_due }}</span>
@@ -64,6 +87,8 @@
         </div>
     </div>
 </div>
+
+<!-- Struggling words (hidden for now, data still computed) -->
 
 <!-- Charts row -->
 <div class="row g-4 mt-3" style="max-width: 700px;">

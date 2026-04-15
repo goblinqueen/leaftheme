@@ -418,6 +418,11 @@ def test_results():
 REVIEW_BATCH_SIZE = 20
 
 
+def _heaven_themes(wt_dict):
+    """Return list of themes whose name contains 'heaven' (case-insensitive)."""
+    return [t for t in wt_dict.themes.values() if 'heaven' in t.name.lower()]
+
+
 @app.route('/review')
 def review_pick():
     wt_dict, file_name = _load_dictionary()
@@ -425,13 +430,12 @@ def review_pick():
         return flask.redirect('load_dictionary')
 
     lt_data = _load_leaftheme()
-    _migrate_forward_srs(wt_dict, lt_data)
 
-    # Count due words per theme + total (both directions)
+    # Only Heaven themes participate in SRS review
     theme_counts = []
     total_fwd = 0
     total_rev = 0
-    for t in wt_dict.themes.values():
+    for t in _heaven_themes(wt_dict):
         fwd = len(_srs_due_words(wt_dict, lt_data, 'forward_srs', t.id))
         rev = len(_srs_due_words(wt_dict, lt_data, 'reverse_srs', t.id))
         theme_counts.append((t, fwd, rev))
@@ -456,8 +460,14 @@ def review_start():
     srs_key = 'reverse_srs' if direction == 'reverse' else 'forward_srs'
 
     lt_data = _load_leaftheme()
-    _migrate_forward_srs(wt_dict, lt_data)
-    due = _srs_due_words(wt_dict, lt_data, srs_key, theme_id)
+
+    # SRS only applies to Heaven themes
+    if theme_id is not None:
+        due = _srs_due_words(wt_dict, lt_data, srs_key, theme_id)
+    else:
+        due = []
+        for t in _heaven_themes(wt_dict):
+            due.extend(_srs_due_words(wt_dict, lt_data, srs_key, t.id))
 
     if not due:
         return flask.render_template('review_done.html',
@@ -540,22 +550,6 @@ def _save_leaftheme(data):
     _mark_unsaved()
 
 
-def _migrate_forward_srs(wt_dict, lt_data):
-    """Import SM-2 data from .wt words into forward_srs (one-time migration)."""
-    if lt_data.get('forward_srs'):
-        return  # already has data
-    fwd = {}
-    for w in wt_dict.words.values():
-        if w.review_date is not None or (w.score and w.score >= 130):
-            fwd[w.uid] = {
-                'tm': w.score if w.score and w.score >= 130 else 0,
-                'ca': w.correct_answers,
-                'di': w.review_interval,
-                'dr': w.review_date,
-            }
-    if fwd:
-        lt_data['forward_srs'] = fwd
-
 
 def _srs_due_words(wt_dict, lt_data, srs_key, theme_id=None):
     """Return Word objects due for review in the given SRS direction."""
@@ -579,11 +573,16 @@ def _srs_due_words(wt_dict, lt_data, srs_key, theme_id=None):
 
 def _apply_srs(lt_data, srs_key, uid, quality):
     """Apply SM-2 to an SRS entry in the given direction, creating it if needed."""
+    from leaftheme.dictionary import _now_iso
     srs = lt_data.setdefault(srs_key, {})
     entry = srs.get(uid, {})
     new_ease, new_reps, new_interval, new_dr = dictionary.Dictionary.Word.sm2_calculate(
         entry.get('tm', 0), entry.get('ca'), entry.get('di'), quality)
-    srs[uid] = {'tm': new_ease, 'ca': new_reps, 'di': new_interval, 'dr': new_dr}
+    cf = entry.get('cf', 0)
+    cf = cf + 1 if quality == 0 else 0
+    log = entry.get('log', [])
+    log.append({'q': quality, 'dt': _now_iso()})
+    srs[uid] = {'tm': new_ease, 'ca': new_reps, 'di': new_interval, 'dr': new_dr, 'cf': cf, 'log': log}
 
 
 UNSAVED_MARKER = '_UNSAVED_'
@@ -627,7 +626,7 @@ def stats():
     from collections import Counter
 
     lt_data = _load_leaftheme()
-    _migrate_forward_srs(wt_dict, lt_data)
+
     fwd_srs = lt_data.get('forward_srs', {})
     rev_srs = lt_data.get('reverse_srs', {})
 
@@ -635,17 +634,28 @@ def stats():
     total_words = len(all_words)
     total_themes = len(wt_dict.themes)
 
-    # Due / reviewed / never reviewed — forward (from leaftheme.json)
-    fwd_due = _srs_due_words(wt_dict, lt_data, 'forward_srs')
-    fwd_reviewed_uids = {uid for uid, e in fwd_srs.items() if e.get('dr') is not None}
-    fwd_reviewed_count = sum(1 for w in all_words if w.uid in fwd_reviewed_uids)
-    fwd_never_reviewed = total_words - fwd_reviewed_count
+    # Heaven words only for SRS stats
+    heaven_word_list = []
+    for t in _heaven_themes(wt_dict):
+        heaven_word_list.extend(t.words.values())
+    heaven_uids = {w.uid for w in heaven_word_list}
+    heaven_count = len(heaven_word_list)
 
-    # Due / reviewed / never reviewed — reverse
-    rev_due = _srs_due_words(wt_dict, lt_data, 'reverse_srs')
-    rev_reviewed_uids = {uid for uid, e in rev_srs.items() if e.get('dr') is not None}
-    rev_reviewed_count = sum(1 for w in all_words if w.uid in rev_reviewed_uids)
-    rev_never_reviewed = total_words - rev_reviewed_count
+    # Due / reviewed / never reviewed — forward (Heaven only)
+    fwd_due = [w for w in _srs_due_words(wt_dict, lt_data, 'forward_srs')
+               if w.uid in heaven_uids]
+    fwd_reviewed_uids = {uid for uid, e in fwd_srs.items()
+                         if e.get('dr') is not None and uid in heaven_uids}
+    fwd_reviewed_count = len(fwd_reviewed_uids)
+    fwd_never_reviewed = heaven_count - fwd_reviewed_count
+
+    # Due / reviewed / never reviewed — reverse (Heaven only)
+    rev_due = [w for w in _srs_due_words(wt_dict, lt_data, 'reverse_srs')
+               if w.uid in heaven_uids]
+    rev_reviewed_uids = {uid for uid, e in rev_srs.items()
+                         if e.get('dr') is not None and uid in heaven_uids}
+    rev_reviewed_count = len(rev_reviewed_uids)
+    rev_never_reviewed = heaven_count - rev_reviewed_count
 
     def _srs_distributions(srs, reviewed_uids):
         ef_buckets = Counter()
@@ -684,6 +694,40 @@ def stats():
     fwd_ef, fwd_int = _srs_distributions(fwd_srs, fwd_reviewed_uids)
     rev_ef, rev_int = _srs_distributions(rev_srs, rev_reviewed_uids)
 
+    # Learning flow stages — detect by theme name keywords
+    FLOW_STAGES = [
+        ('Hell', 'bg-danger'),
+        ('Purgatory', 'bg-warning text-dark'),
+        ('Gates', 'bg-secondary'),
+        ('Ring', 'bg-info text-dark'),
+        ('Heaven', 'bg-success'),
+    ]
+    flow_stats = []
+    for keyword, badge_class in FLOW_STAGES:
+        matching = [t for t in wt_dict.themes.values()
+                    if keyword.lower() in t.name.lower()]
+        count = sum(t.word_count() for t in matching)
+        theme_ids = [t.id for t in matching]
+        flow_stats.append({'label': keyword, 'count': count,
+                           'badge': badge_class, 'theme_ids': theme_ids})
+
+    # Struggling words in Heaven (forward): cf >= 2 or tm <= 150
+    heaven_themes = [t for t in wt_dict.themes.values()
+                     if 'heaven' in t.name.lower()]
+    struggling_words = []
+    for t in heaven_themes:
+        for w in t.words.values():
+            entry = fwd_srs.get(w.uid, {})
+            cf = entry.get('cf', 0)
+            tm = entry.get('tm', 0)
+            reviewed = entry.get('dr') is not None
+            if reviewed and (cf >= 2 or (tm and 0 < tm <= 150)):
+                struggling_words.append({
+                    'id': w.id, 'word': w.word, 'translation': w.translation,
+                    'cf': cf, 'tm': tm, 'theme': t.name,
+                })
+    struggling_words.sort(key=lambda x: (-x['cf'], x['tm']))
+
     # Theme breakdown
     theme_stats = []
     for t in sorted(wt_dict.themes.values(), key=lambda t: t.word_count(), reverse=True):
@@ -712,6 +756,8 @@ def stats():
                                  rev_due=len(rev_due),
                                  rev_reviewed=rev_reviewed_count,
                                  rev_never=rev_never_reviewed,
+                                 flow_stats=flow_stats,
+                                 struggling_words=struggling_words,
                                  ef_labels=json.dumps(ef_labels),
                                  fwd_ef_data=json.dumps([fwd_ef.get(l, 0) for l in ef_labels]),
                                  rev_ef_data=json.dumps([rev_ef.get(l, 0) for l in ef_labels]),
