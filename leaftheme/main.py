@@ -32,6 +32,7 @@ PROJECT_ID = "goblin-queendom"
 
 DICTIONARY_FILE_NAME = 'dictionary.txt'
 LEAFTHEME_FILE_NAME = 'leaftheme.json'
+REMOVED_FILE_NAME = 'removed.txt'
 EMPTY_LEAFTHEME = {"version": 1, "forward_srs": {}, "reverse_srs": {}}
 
 SCOPES = ['https://www.googleapis.com/auth/drive.metadata.readonly',
@@ -148,6 +149,7 @@ def load_dictionary():
         return flask.redirect(flask.url_for('clear_credentials'))
 
     _clear_unsaved()
+    _clear_removed()
     return flask.render_template('loaded.html', menu_items=get_menu_items())
 
 
@@ -260,6 +262,7 @@ def get_word(word_id):
         new_word = flask.request.form.get('word', '').strip()
         new_translation = flask.request.form.get('translation', '').strip()
         new_theme_id = flask.request.form.get('theme_id', type=int)
+        redirect_to = flask.request.form.get('redirect_to', '').strip()
         if new_word:
             word.word = new_word
         if new_translation:
@@ -267,12 +270,14 @@ def get_word(word_id):
         if new_theme_id is not None and new_theme_id != word.theme:
             wt_dict.move_word(word_id, new_theme_id)
         _save_dictionary(wt_dict, file_name)
-        return flask.redirect(flask.url_for('get_word', word_id=word_id))
+        return flask.redirect(redirect_to or flask.url_for('get_word', word_id=word_id))
 
+    redirect_to = flask.request.args.get('redirect_to', '').strip() or flask.request.referrer or ''
     theme = wt_dict.themes[word.theme] if word.theme is not None else None
     return flask.render_template('word.html',
                                  menu_items=get_menu_items(), word=word, theme=theme,
-                                 all_themes=wt_dict.themes.values())
+                                 all_themes=wt_dict.themes.values(),
+                                 redirect_to=redirect_to)
 
 
 @app.route('/word/<int:word_id>/glosbe')
@@ -312,8 +317,12 @@ def delete_word(word_id):
     if word is None:
         flask.abort(404)
     theme_id = word.theme
+    redirect_to = flask.request.form.get('redirect_to', '').strip()
+    _append_removed(word)
     wt_dict.remove_word(word_id)
     _save_dictionary(wt_dict, file_name)
+    if redirect_to:
+        return flask.redirect(redirect_to)
     if theme_id is not None:
         return flask.redirect(flask.url_for('get_words', theme_id=theme_id))
     return flask.redirect(flask.url_for('get_themes'))
@@ -493,7 +502,7 @@ def review_start():
 
 @app.route('/review/apply', methods=['POST'])
 def review_apply():
-    """Apply SM-2 ratings (uid-keyed, both directions stored in leaftheme.json)."""
+    """Apply SM-2 ratings, save leaftheme.json to Drive, redirect to saved confirmation."""
     data = flask.request.get_json()
     results = data.get('results', {})  # {word_uid: quality}
     theme_id = data.get('theme_id')
@@ -507,11 +516,55 @@ def review_apply():
 
     _save_leaftheme(lt_data)
 
-    redirect_args = {'direction': direction}
+    # Save leaftheme.json to Drive immediately after each batch
+    drive_saved = False
+    try:
+        if 'credentials' in flask.session:
+            save_leaftheme_to_drive(
+                flask.session['credentials'],
+                flask.session.get('leaftheme_file_id'),
+                flask.session.get('wt_folder_id'),
+                flask.session['file_name']
+            )
+            drive_saved = True
+    except Exception:
+        pass  # Don't break the review if Drive save fails
+
+    redirect_args = {'direction': direction, 'reviewed': len(results)}
     if theme_id is not None:
         redirect_args['theme_id'] = theme_id
     return flask.jsonify(status='ok', reviewed=len(results),
-                         redirect=flask.url_for('review_start', **redirect_args))
+                         redirect=flask.url_for('review_saved', **redirect_args))
+
+
+@app.route('/review/saved')
+def review_saved():
+    """Shown after each review batch is saved to Drive."""
+    direction = flask.request.args.get('direction', 'forward')
+    theme_id = flask.request.args.get('theme_id', type=int)
+    reviewed = flask.request.args.get('reviewed', type=int, default=0)
+
+    # Count remaining due words so the button shows the number
+    wt_dict, _ = _load_dictionary()
+    remaining = 0
+    if wt_dict is not None:
+        lt_data = _load_leaftheme()
+        srs_key = 'reverse_srs' if direction == 'reverse' else 'forward_srs'
+        heaven_uids = {w.uid for t in _heaven_themes(wt_dict) for w in t.words.values()}
+        due = [w for w in _srs_due_words(wt_dict, lt_data, srs_key, theme_id)
+               if w.uid in heaven_uids]
+        remaining = len(due)
+
+    continue_args = {'direction': direction}
+    if theme_id is not None:
+        continue_args['theme_id'] = theme_id
+
+    return flask.render_template('review_saved.html',
+                                 menu_items=get_menu_items(),
+                                 reviewed=reviewed,
+                                 remaining=remaining,
+                                 direction=direction,
+                                 continue_url=flask.url_for('review_start', **continue_args))
 
 
 def _load_dictionary():
@@ -614,6 +667,39 @@ def _save_dictionary(wt_dict, file_name):
     with open(file_name, 'w', encoding='utf8') as f:
         json.dump(wt_dict.to_dict(), f, ensure_ascii=False, separators=(',', ':'))
     _mark_unsaved()
+
+
+def _removed_path():
+    session_dir = flask.session.get('file_name')
+    return os.path.join(session_dir, REMOVED_FILE_NAME) if session_dir else None
+
+
+def _load_removed():
+    """Return current removed.txt content as bytes (may be empty)."""
+    path = _removed_path()
+    if path and os.path.exists(path):
+        with open(path, 'rb') as f:
+            return f.read()
+    return b''
+
+
+def _append_removed(word):
+    """Append a deleted word's entry to the local removed.txt."""
+    from leaftheme.dictionary import _now_iso
+    path = _removed_path()
+    if not path:
+        return
+    line = f'1;{word.uid};{_now_iso()}\n'
+    with open(path, 'a', encoding='utf-8') as f:
+        f.write(line)
+
+
+def _clear_removed():
+    """Reset removed.txt to empty (after a successful Drive upload or fresh download)."""
+    path = _removed_path()
+    if path:
+        with open(path, 'w') as f:
+            pass
 
 
 @app.route('/stats')
@@ -800,6 +886,7 @@ def save_dictionary():
         return flask.redirect('authorize')
 
     _clear_unsaved()
+    _clear_removed()
     word_count = sum(t.word_count() for t in wt_dict.themes.values())
     theme_count = len(wt_dict.themes)
     return flask.render_template('saved.html', menu_items=get_menu_items(),
@@ -961,10 +1048,12 @@ def save_dictionary_to_drive(credentials_dict, file_id, session_dir):
         dict_info = zipfile.ZipInfo(DICTIONARY_FILE_NAME)
         dict_info.compress_type = zipfile.ZIP_DEFLATED
         zf.writestr(dict_info, dict_bytes)
-        # removed.txt must exist in the archive (app requires it)
+        # removed.txt — carries pending deletions so the Android app removes them on next sync
+        removed_path = os.path.join(session_dir, REMOVED_FILE_NAME)
+        removed_bytes = open(removed_path, 'rb').read() if os.path.exists(removed_path) else b''
         removed_info = zipfile.ZipInfo('removed.txt')
         removed_info.compress_type = zipfile.ZIP_DEFLATED
-        zf.writestr(removed_info, b'')
+        zf.writestr(removed_info, removed_bytes)
 
     # Fix zip for Android compatibility
     fixed = _fix_zip_for_android(buf.getvalue())
