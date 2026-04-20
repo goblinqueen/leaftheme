@@ -52,13 +52,13 @@ class Dictionary:
             return len(self.words)
 
         def search(self, query, reverse=False):
-            from rapidfuzz import process
+            from rapidfuzz import process, fuzz
             words = list(self.words.values())
             if reverse:
                 candidates = {w.translation: w for w in words}
             else:
                 candidates = {w.word: w for w in words}
-            results = process.extract(query, list(candidates.keys()), limit=10, score_cutoff=50)
+            results = process.extract(query, list(candidates.keys()), scorer=fuzz.ratio, limit=10, score_cutoff=50)
             return [(res[1], candidates[res[0]], self.id, self.name) for res in results]
 
     class Word:
