@@ -8,6 +8,7 @@
 <p class="fs-4 text-muted">{{ word.translation }}</p>
 
 <form method="post" class="mt-3" style="max-width: 420px;">
+    <input type="hidden" name="redirect_to" value="{{ redirect_to }}">
     <div class="mb-2">
         <label class="form-label small text-muted mb-1">Finnish</label>
         <input type="text" name="word" class="form-control" value="{{ word.word }}">
@@ -35,6 +36,7 @@
 
 <form method="post" action="/word/{{ word.id }}/delete" class="mt-2"
       onsubmit="return confirm('Delete {{ word.word }}?')">
+    <input type="hidden" name="redirect_to" value="{{ redirect_to }}">
     <button type="submit" class="btn btn-outline-danger btn-sm">Delete word</button>
 </form>
 
