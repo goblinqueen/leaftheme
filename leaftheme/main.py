@@ -502,7 +502,7 @@ def review_start():
 
 @app.route('/review/apply', methods=['POST'])
 def review_apply():
-    """Apply SM-2 ratings, save leaftheme.json to Drive, redirect to saved confirmation."""
+    """Apply SM-2 ratings, save both files to Drive, redirect to confirmation page."""
     data = flask.request.get_json()
     results = data.get('results', {})  # {word_uid: quality}
     theme_id = data.get('theme_id')
@@ -510,23 +510,25 @@ def review_apply():
     srs_key = 'reverse_srs' if direction == 'reverse' else 'forward_srs'
 
     lt_data = _load_leaftheme()
-
     for uid, quality in results.items():
         _apply_srs(lt_data, srs_key, uid, quality)
-
     _save_leaftheme(lt_data)
 
-    # Save leaftheme.json to Drive immediately after each batch
-    drive_saved = False
+    # Save both files to Drive and clear the unsaved flag
     try:
         if 'credentials' in flask.session:
+            save_dictionary_to_drive(
+                flask.session['credentials'],
+                flask.session['dict_file_id'],
+                flask.session['file_name']
+            )
             save_leaftheme_to_drive(
                 flask.session['credentials'],
                 flask.session.get('leaftheme_file_id'),
                 flask.session.get('wt_folder_id'),
                 flask.session['file_name']
             )
-            drive_saved = True
+            _clear_unsaved()
     except Exception:
         pass  # Don't break the review if Drive save fails
 
