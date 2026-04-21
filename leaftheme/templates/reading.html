@@ -1,0 +1,60 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<div class="mt-4">
+    <h2>Reading</h2>
+
+    <form method="POST" action="/reading">
+        <div class="mb-3">
+            <textarea name="text" class="form-control" rows="5"
+                      placeholder="Paste Finnish text here…">{{ input_text }}</textarea>
+        </div>
+        <button type="submit" class="btn btn-primary">Analyze</button>
+    </form>
+
+    {% if tokens is not none %}
+    <hr class="my-4">
+    <div class="reading-text mt-3">{% for tok in tokens %}{% if tok.type == 'punct' %}{{ tok.src }}{% else %}<span class="wt-word {% if tok.has_translation %}wt-known{% else %}wt-analyzed{% endif %}" tabindex="0" data-bs-toggle="popover" data-bs-placement="top" data-bs-html="true" data-bs-content="{{ tok.popup_html }}" data-bs-trigger="click focus">{{ tok.src }}</span>{% endif %}{% endfor %}</div>
+    {% endif %}
+</div>
+
+<style>
+.reading-text {
+    font-size: 1.15rem;
+    line-height: 2.4;
+    white-space: pre-wrap;
+}
+.wt-word {
+    cursor: pointer;
+    border-radius: 2px;
+    padding: 0 1px;
+    transition: background 0.1s;
+}
+.wt-word:hover, .wt-word:focus {
+    background: rgba(0, 0, 0, 0.07);
+    outline: none;
+}
+.wt-pe {
+    font-size: 0.875rem;
+    min-width: 170px;
+}
+.popover {
+    max-width: 300px;
+}
+</style>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+    const triggers = [...document.querySelectorAll('[data-bs-toggle="popover"]')];
+    const popovers = triggers.map(el => new bootstrap.Popover(el, { sanitize: false }));
+    document.addEventListener('click', e => {
+        if (!e.target.closest('[data-bs-toggle="popover"]')) {
+            popovers.forEach(p => p.hide());
+        }
+    });
+})();
+</script>
+{% endblock %}
