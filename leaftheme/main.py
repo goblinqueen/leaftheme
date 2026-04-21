@@ -1,9 +1,11 @@
+import html as _html
 import io
 import json
 import os
 import random
 import struct
 import zipfile
+from urllib.parse import quote_plus
 
 import flask
 
@@ -857,6 +859,70 @@ def stats():
                                  month_data=json.dumps(month_data))
 
 
+_CLASS_BADGE = {
+    'nimisana':   'bg-info text-dark',
+    'teonsana':   'bg-primary',
+    'adjektiivi': 'bg-success',
+    'adverbi':    'bg-warning text-dark',
+    'asemosana':  'bg-secondary',
+}
+
+
+def _word_popup_html(token):
+    """Build Bootstrap popover HTML content for a word token."""
+    parts = []
+    for e in token['entries']:
+        base = _html.escape(e['base'] or '')
+        trans = _html.escape(e['translation']) if e['translation'] else None
+        word_class = e.get('word_class') or ''
+        word_id = e.get('word_id')
+
+        badge = _CLASS_BADGE.get(word_class, 'bg-secondary')
+
+        line = f'<div class="wt-pe border rounded px-2 py-1 mb-1"><span class="fw-medium">{base}</span>'
+        if trans:
+            line += f' \u2013 {trans}'
+        if word_class:
+            line += f' <span class="badge {badge}">{_html.escape(word_class)}</span>'
+        if word_id is not None:
+            line += f' <a href="/word/{word_id}" class="text-secondary ms-1 text-decoration-none">&#x2197;</a>'
+        line += '</div>'
+        parts.append(line)
+
+    if not any(e['translation'] for e in token['entries']):
+        first_base = token['entries'][0]['base'] if token['entries'] else token['src']
+        parts.append(f'<a href="/add_word?word={quote_plus(first_base)}" class="small">+ Add</a>')
+
+    return ''.join(parts)
+
+
+@app.route('/reading', methods=['GET', 'POST'])
+def reading():
+    wt_dict, file_name = _load_dictionary()
+    if wt_dict is None:
+        return flask.redirect('load_dictionary')
+
+    import read as _read
+
+    input_text = ''
+    tokens = None
+
+    if flask.request.method == 'POST':
+        input_text = flask.request.form.get('text', '').strip()
+        if input_text:
+            tokens = _read.analyze_text(input_text, wt_dict)
+            for tok in tokens:
+                if tok['type'] == 'word':
+                    tok['popup_html'] = _word_popup_html(tok)
+                elif tok['type'] == 'word_unanalyzed':
+                    tok['popup_html'] = f'<a href="/add_word?word={quote_plus(tok["src"])}" class="small">+ Add</a>'
+
+    return flask.render_template('reading.html',
+                                 menu_items=get_menu_items(),
+                                 input_text=input_text,
+                                 tokens=tokens)
+
+
 @app.route('/save_dictionary')
 def save_dictionary():
     if 'credentials' not in flask.session:
@@ -1107,6 +1173,7 @@ def get_menu_items():
         out.append(('Add Word', "/add_word"))
         out.append(('Review', "/review"))
         out.append(('Stats', "/stats"))
+        out.append(('Reading', "/reading"))
     else:
         out.append(("Load Dictionary", "/load_dictionary"))
     out.append(("Logout", "/clear"))
