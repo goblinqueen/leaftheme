@@ -5,6 +5,7 @@ import os
 import random
 import struct
 import zipfile
+from datetime import timedelta
 from urllib.parse import quote_plus
 
 import flask
@@ -49,6 +50,7 @@ os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
 
 app = flask.Flask(__name__)
 app.secret_key = os.environ['SECRET_KEY']
+app.permanent_session_lifetime = timedelta(days=60)
 
 
 @app.template_filter('fmtdate')
@@ -571,11 +573,56 @@ def review_saved():
                                  continue_url=flask.url_for('review_start', **continue_args))
 
 
+def _fetch_from_drive():
+    """Re-download dict + leaftheme from Drive using IDs already stored in the session.
+    Called automatically on dyno cold-start when temp files are missing."""
+    credentials = google.oauth2.credentials.Credentials(**flask.session['credentials'])
+    drive = build(API_SERVICE_NAME, API_VERSION, credentials=credentials)
+
+    # Download .wt zip directly using the stored file ID (no folder search needed)
+    request = drive.files().get_media(fileId=flask.session['dict_file_id'])
+    file = io.BytesIO()
+    downloader = googleapiclient.http.MediaIoBaseDownload(file, request)
+    done = False
+    while not done:
+        _, done = downloader.next_chunk()
+    os.makedirs(flask.session['file_name'], exist_ok=True)
+    zip_path = f'{flask.session["file_name"]}/dictionary.zip'
+    with open(zip_path, 'wb') as f:
+        f.write(file.getvalue())
+    with zipfile.ZipFile(zip_path, 'r') as zip_file:
+        zip_file.extract(DICTIONARY_FILE_NAME, flask.session['file_name'])
+
+    # Download leaftheme.json
+    lt_path = os.path.join(flask.session['file_name'], LEAFTHEME_FILE_NAME)
+    if flask.session.get('leaftheme_file_id'):
+        lt_request = drive.files().get_media(fileId=flask.session['leaftheme_file_id'])
+        lt_buf = io.BytesIO()
+        lt_dl = googleapiclient.http.MediaIoBaseDownload(lt_buf, lt_request)
+        lt_done = False
+        while not lt_done:
+            _, lt_done = lt_dl.next_chunk()
+        with open(lt_path, 'wb') as f:
+            f.write(lt_buf.getvalue())
+    else:
+        with open(lt_path, 'w', encoding='utf-8') as f:
+            json.dump(EMPTY_LEAFTHEME, f)
+
+    _clear_removed()
+
+
 def _load_dictionary():
-    """Load dictionary from session file. Returns (Dictionary, file_path) or redirects."""
+    """Load dictionary from session file. Returns (Dictionary, file_path) or (None, path).
+    If temp files are missing but credentials are in session, re-fetches from Drive silently."""
     file_name = flask.session.get('file_name', '_none_') + '/' + DICTIONARY_FILE_NAME
     if not os.path.exists(file_name):
-        return None, file_name
+        if 'credentials' in flask.session and flask.session.get('dict_file_id'):
+            try:
+                _fetch_from_drive()
+            except Exception:
+                pass
+        if not os.path.exists(file_name):
+            return None, file_name
     with open(file_name, encoding="utf8") as f:
         return dictionary.Dictionary(json.load(f)), file_name
 
@@ -1028,6 +1075,7 @@ def oauth2callback():
 
     credentials = flow.credentials
     flask.session['credentials'] = credentials_to_dict(credentials)
+    flask.session.permanent = True
 
     return flask.redirect(flask.url_for('load_dictionary'))
 
