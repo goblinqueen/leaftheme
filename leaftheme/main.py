@@ -613,16 +613,10 @@ def _fetch_from_drive():
 
 def _load_dictionary():
     """Load dictionary from session file. Returns (Dictionary, file_path) or (None, path).
-    If temp files are missing but credentials are in session, re-fetches from Drive silently."""
+    Cold-start recovery is handled client-side via localStorage (see base.html JS)."""
     file_name = flask.session.get('file_name', '_none_') + '/' + DICTIONARY_FILE_NAME
     if not os.path.exists(file_name):
-        if 'credentials' in flask.session and flask.session.get('dict_file_id'):
-            try:
-                _fetch_from_drive()
-            except Exception:
-                pass
-        if not os.path.exists(file_name):
-            return None, file_name
+        return None, file_name
     with open(file_name, encoding="utf8") as f:
         return dictionary.Dictionary(json.load(f)), file_name
 
@@ -968,6 +962,70 @@ def reading():
                                  menu_items=get_menu_items(),
                                  input_text=input_text,
                                  tokens=tokens)
+
+
+@app.route('/api/dict_status')
+def api_dict_status():
+    """Lightweight check: does the server currently have the dictionary in its temp files?"""
+    if 'file_name' not in flask.session:
+        return flask.jsonify({'loaded': False})
+    path = flask.session['file_name'] + '/' + DICTIONARY_FILE_NAME
+    loaded = os.path.exists(path)
+    mtime = int(os.path.getmtime(path) * 1000) if loaded else None
+    return flask.jsonify({'loaded': loaded, 'mtime': mtime})
+
+
+@app.route('/api/dict_json')
+def api_dict_json():
+    """Return current dictionary + leaftheme JSON so the browser can cache them."""
+    if 'file_name' not in flask.session:
+        return flask.jsonify({'error': 'no session'}), 401
+    dict_path = flask.session['file_name'] + '/' + DICTIONARY_FILE_NAME
+    if not os.path.exists(dict_path):
+        return flask.jsonify({'error': 'not loaded'}), 404
+    with open(dict_path, encoding='utf-8') as f:
+        dict_content = f.read()
+    lt_path = flask.session['file_name'] + '/' + LEAFTHEME_FILE_NAME
+    if os.path.exists(lt_path):
+        with open(lt_path, encoding='utf-8') as f:
+            lt_content = f.read()
+    else:
+        lt_content = json.dumps(EMPTY_LEAFTHEME)
+    return flask.jsonify({'dict': dict_content, 'leaftheme': lt_content,
+                          'unsaved': _has_unsaved()})
+
+
+@app.route('/api/restore_cache', methods=['POST'])
+def api_restore_cache():
+    """Write browser-cached dictionary + leaftheme back to server temp files after a cold start."""
+    if 'file_name' not in flask.session:
+        return flask.jsonify({'error': 'no session'}), 401
+    data = flask.request.get_json()
+    if not data or 'dict' not in data:
+        return flask.jsonify({'error': 'no data'}), 400
+    session_dir = flask.session['file_name']
+    os.makedirs(session_dir, exist_ok=True)
+    with open(session_dir + '/' + DICTIONARY_FILE_NAME, 'w', encoding='utf-8') as f:
+        f.write(data['dict'])
+    with open(session_dir + '/' + LEAFTHEME_FILE_NAME, 'w', encoding='utf-8') as f:
+        f.write(data.get('leaftheme', json.dumps(EMPTY_LEAFTHEME)))
+    if data.get('unsaved'):
+        _mark_unsaved()
+    return flask.jsonify({'ok': True})
+
+
+@app.route('/api/fetch_from_drive', methods=['POST'])
+def api_fetch_from_drive():
+    """Fallback: re-download from Drive when browser has no cached data (new browser/incognito)."""
+    if 'credentials' not in flask.session or 'dict_file_id' not in flask.session:
+        return flask.jsonify({'error': 'no credentials'}), 401
+    try:
+        _fetch_from_drive()
+        return flask.jsonify({'ok': True})
+    except RefreshError:
+        return flask.jsonify({'error': 'auth_expired'}), 401
+    except Exception as e:
+        return flask.jsonify({'error': str(e)}), 500
 
 
 @app.route('/save_dictionary')

@@ -68,5 +68,49 @@
         <!-- Core theme JS-->
         <script src="{{ url_for('static', filename='js/scripts.js')}}"></script>
         {% block scripts %}{% endblock %}
+        <script>
+        (function () {
+            var sid = {{ session.get('file_name') | tojson }};
+            if (!sid) return;
+            var DK = 'wt_d_' + sid, LK = 'wt_l_' + sid,
+                UK = 'wt_u_' + sid, MK = 'wt_m_' + sid;
+
+            fetch('/api/dict_status').then(function (r) { return r.json(); }).then(function (s) {
+                if (s.loaded) {
+                    // Server has the dict — update localStorage only if file changed
+                    if (String(s.mtime) !== localStorage.getItem(MK)) {
+                        fetch('/api/dict_json').then(function (r) { return r.json(); }).then(function (d) {
+                            localStorage.setItem(DK, d.dict);
+                            localStorage.setItem(LK, d.leaftheme);
+                            localStorage.setItem(UK, d.unsaved ? '1' : '');
+                            localStorage.setItem(MK, String(s.mtime));
+                        }).catch(function () {});
+                    }
+                } else {
+                    // Cold start — try localStorage first
+                    var dict = localStorage.getItem(DK);
+                    if (dict) {
+                        fetch('/api/restore_cache', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                dict: dict,
+                                leaftheme: localStorage.getItem(LK) || '{}',
+                                unsaved: !!localStorage.getItem(UK)
+                            })
+                        }).then(function (r) { return r.json(); }).then(function (d) {
+                            if (d.ok) window.location = '/themes';
+                        }).catch(function () {});
+                    } else {
+                        // No localStorage data — fall back to Drive (new browser / incognito)
+                        fetch('/api/fetch_from_drive', { method: 'POST' })
+                            .then(function (r) { return r.json(); }).then(function (d) {
+                                if (d.ok) window.location = '/themes';
+                            }).catch(function () {});
+                    }
+                }
+            }).catch(function () {});
+        })();
+        </script>
     </body>
 </html>
