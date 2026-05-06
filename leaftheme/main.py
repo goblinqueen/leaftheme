@@ -1031,6 +1031,7 @@ def api_fetch_from_drive():
 @app.route('/save_dictionary')
 def save_dictionary():
     if 'credentials' not in flask.session:
+        flask.session['oauth_next'] = flask.url_for('save_dictionary')
         return flask.redirect('authorize')
     if 'dict_file_id' not in flask.session:
         return flask.redirect('load_dictionary')
@@ -1056,6 +1057,7 @@ def save_dictionary():
             flask.session['file_name']
         )
     except RefreshError:
+        flask.session['oauth_next'] = flask.url_for('save_dictionary')
         return flask.redirect('authorize')
 
     _clear_unsaved()
@@ -1071,10 +1073,11 @@ def save_dictionary():
 def authorize():
 
     import uuid
-    file_name = str(uuid.uuid4())
-    if not os.path.exists(file_name):
-        os.makedirs(file_name)
-    flask.session['file_name'] = file_name
+    if 'file_name' not in flask.session:
+        file_name = str(uuid.uuid4())
+        if not os.path.exists(file_name):
+            os.makedirs(file_name)
+        flask.session['file_name'] = file_name
 
     flow = google_auth_oauthlib.flow.Flow.from_client_config(
         {
@@ -1135,7 +1138,8 @@ def oauth2callback():
     flask.session['credentials'] = credentials_to_dict(credentials)
     flask.session.permanent = True
 
-    return flask.redirect(flask.url_for('load_dictionary'))
+    next_url = flask.session.pop('oauth_next', None)
+    return flask.redirect(next_url or flask.url_for('load_dictionary'))
 
 
 @app.route('/clear')
