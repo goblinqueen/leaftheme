@@ -50,6 +50,22 @@
   --bs-btn-focus-shadow-rgb: 227, 168, 115;
 }
 
+.list-group {
+  --bs-list-group-color: #EDE6DC;
+  --bs-list-group-bg: #2F2820;
+  --bs-list-group-border-color: #3D342A;
+  --bs-list-group-action-color: #EDE6DC;
+  --bs-list-group-action-hover-color: #EDE6DC;
+  --bs-list-group-action-hover-bg: #3D342A;
+  --bs-list-group-action-active-color: #211C17;
+  --bs-list-group-action-active-bg: #E3A873;
+  --bs-list-group-disabled-color: #AFA495;
+  --bs-list-group-disabled-bg: #2F2820;
+  --bs-list-group-active-color: #211C17;
+  --bs-list-group-active-bg: #E3A873;
+  --bs-list-group-active-border-color: #E3A873;
+}
+
 .list-group-item-light {
   color: #AFA495;
   background-color: #2B241D;
@@ -67,6 +83,27 @@
 
 .card {
   --bs-card-bg: #2F2820;
+}
+
+.form-control,
+.form-select {
+  color: #EDE6DC;
+  background-color: #2F2820;
+  border-color: #3D342A;
+}
+.form-control:focus,
+.form-select:focus {
+  color: #EDE6DC;
+  background-color: #2F2820;
+  border-color: #E3A873;
+  box-shadow: 0 0 0 0.25rem rgba(227, 168, 115, 0.25);
+}
+.form-control::-moz-placeholder,
+.form-control::placeholder {
+  color: #AFA495;
+}
+.form-select {
+  background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3e%3cpath fill='none' stroke='%23AFA495' stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='m2 5 6 6 6-6'/%3e%3c/svg%3e");
 }
 
 .navbar {
