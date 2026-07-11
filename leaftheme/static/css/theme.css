@@ -1,0 +1,91 @@
+/* LeafTheme palette: warm-tinted dark theme, always on (no light variant).
+   Bootstrap hardcodes colors as component-level vars (--bs-btn-bg etc.)
+   rather than referencing the :root vars, so those are overridden explicitly
+   below wherever the component is actually used in this app's templates. */
+
+:root {
+  --bs-body-bg: #211C17;
+  --bs-body-color: #EDE6DC;
+  --bs-body-bg-rgb: 33, 28, 23;
+  --bs-body-color-rgb: 237, 230, 220;
+
+  --bs-primary: #E3A873;
+  --bs-primary-rgb: 227, 168, 115;
+  --bs-link-color: #E3A873;
+  --bs-link-hover-color: #EEC79E;
+
+  --bs-light: #2B241D;
+  --bs-light-rgb: 43, 36, 29;
+  --bs-white: #2F2820;
+  --bs-white-rgb: 47, 40, 32;
+
+  --bs-border-color: #3D342A;
+  --bs-border-color-translucent: rgba(237, 230, 220, 0.12);
+}
+
+.text-muted {
+  color: #AFA495 !important;
+}
+
+.btn-primary {
+  --bs-btn-color: #211C17;
+  --bs-btn-bg: #E3A873;
+  --bs-btn-border-color: #E3A873;
+  --bs-btn-hover-color: #211C17;
+  --bs-btn-hover-bg: #EEC79E;
+  --bs-btn-hover-border-color: #EEC79E;
+  --bs-btn-active-bg: #D89257;
+  --bs-btn-active-border-color: #D89257;
+  --bs-btn-focus-shadow-rgb: 227, 168, 115;
+}
+
+.btn-outline-primary {
+  --bs-btn-color: #E3A873;
+  --bs-btn-border-color: #E3A873;
+  --bs-btn-hover-color: #211C17;
+  --bs-btn-hover-bg: #E3A873;
+  --bs-btn-hover-border-color: #E3A873;
+  --bs-btn-active-bg: #D89257;
+  --bs-btn-active-border-color: #D89257;
+  --bs-btn-focus-shadow-rgb: 227, 168, 115;
+}
+
+.list-group-item-light {
+  color: #AFA495;
+  background-color: #2B241D;
+}
+.list-group-item-light.list-group-item-action:hover,
+.list-group-item-light.list-group-item-action:focus {
+  color: #AFA495;
+  background-color: #3D342A;
+}
+.list-group-item-light.list-group-item-action.active {
+  color: #211C17;
+  background-color: #AFA495;
+  border-color: #AFA495;
+}
+
+.card {
+  --bs-card-bg: #2F2820;
+}
+
+.navbar {
+  --bs-navbar-color: rgba(237, 230, 220, 0.75);
+  --bs-navbar-hover-color: #EDE6DC;
+  --bs-navbar-brand-color: #EDE6DC;
+  --bs-navbar-brand-hover-color: #EDE6DC;
+  --bs-navbar-toggler-border-color: rgba(237, 230, 220, 0.15);
+  --bs-navbar-toggler-icon-bg: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 30 30'%3e%3cpath stroke='rgba%28237, 230, 220, 0.75%29' stroke-linecap='round' stroke-miterlimit='10' stroke-width='2' d='M4 7h22M4 15h22M4 23h22'/%3e%3c/svg%3e");
+}
+
+.dropdown-menu {
+  --bs-dropdown-color: #EDE6DC;
+  --bs-dropdown-bg: #2F2820;
+  --bs-dropdown-border-color: #3D342A;
+  --bs-dropdown-link-color: #EDE6DC;
+  --bs-dropdown-link-hover-color: #EDE6DC;
+  --bs-dropdown-link-hover-bg: #3D342A;
+  --bs-dropdown-link-active-color: #211C17;
+  --bs-dropdown-link-active-bg: #E3A873;
+  --bs-dropdown-header-color: #AFA495;
+}
