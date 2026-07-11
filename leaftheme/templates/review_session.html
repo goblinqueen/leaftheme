@@ -52,9 +52,14 @@ document.addEventListener('DOMContentLoaded', () => {
     const progressBar = document.getElementById('progress-bar');
     const progressText = document.getElementById('progress-text');
     const undoBtn = document.getElementById('btn-undo');
-    const ratingColors = {3: '#198754', 2: '#0d6efd', 1: '#ffc107', 0: '#dc3545'};
-    const cardBody = document.querySelector('.card-body');
+    const card = document.querySelector('.card');
     let animating = false;
+
+    function ringColor(quality, alpha) {
+        const btn = ratingArea.querySelector('.btn-rating[data-rating="' + quality + '"]');
+        const nums = getComputedStyle(btn).backgroundColor.match(/\d+/g);
+        return 'rgba(' + nums[0] + ', ' + nums[1] + ', ' + nums[2] + ', ' + alpha + ')';
+    }
 
     function showWord(revealed = false) {
         const w = words[currentIndex];
@@ -88,11 +93,11 @@ document.addEventListener('DOMContentLoaded', () => {
         if (animating) return;
         animating = true;
         results[words[currentIndex].id] = quality;
-        cardBody.style.transition = 'background-color 0s';
-        cardBody.style.backgroundColor = ratingColors[quality];
+        card.style.transition = 'box-shadow 0.15s ease-out';
+        card.style.boxShadow = '0 0 0 3px ' + ringColor(quality, 0.5) + ', 0 0 24px ' + ringColor(quality, 0.35);
         setTimeout(() => {
-            cardBody.style.transition = 'background-color 0.4s';
-            cardBody.style.backgroundColor = '';
+            card.style.transition = 'box-shadow 0.5s ease-in';
+            card.style.boxShadow = 'none';
             animating = false;
             currentIndex++;
             if (currentIndex < words.length) {
@@ -108,8 +113,8 @@ document.addEventListener('DOMContentLoaded', () => {
         if (animating || currentIndex === 0) return;
         currentIndex--;
         delete results[words[currentIndex].id];
-        cardBody.style.transition = 'none';
-        cardBody.style.backgroundColor = '';
+        card.style.transition = 'none';
+        card.style.boxShadow = 'none';
         showWord(true);
     }
 
