@@ -1,14 +1,44 @@
 {% extends 'base.html' %}
 
+{% macro pager() %}
+{% if pages > 1 %}
+<nav class="d-flex align-items-center gap-2 my-2">
+    {% if page > 1 %}
+    <a class="btn btn-sm btn-outline-secondary" href="?page={{ page - 1 }}">&larr; Newer</a>
+    {% else %}
+    <span class="btn btn-sm btn-outline-secondary disabled">&larr; Newer</span>
+    {% endif %}
+    <span class="text-muted small">Page {{ page }} of {{ pages }}</span>
+    {% if page < pages %}
+    <a class="btn btn-sm btn-outline-secondary" href="?page={{ page + 1 }}">Older &rarr;</a>
+    {% else %}
+    <span class="btn btn-sm btn-outline-secondary disabled">Older &rarr;</span>
+    {% endif %}
+</nav>
+{% endif %}
+{% endmacro %}
+
 {% block content %}
 <h2 class="mt-4">{{ theme.name }}</h2>
-<p>
+<p class="text-muted mb-2">{{ word_count }} word{{ 's' if word_count != 1 }}, newest first</p>
+
+{{ pager() }}
+<table class="table table-sm align-middle">
+    <tbody>
     {% for word in words %}
-    <a href="/word/{{ word.id }}">{{ word }}</a> <br />
+    <tr>
+        <td><a href="/word/{{ word.id }}">{{ word.word }}</a></td>
+        <td class="text-muted">{{ word.translation }}</td>
+        <td class="text-end text-muted small text-nowrap">{{ word.created_date | fmtdate }}</td>
+    </tr>
     {% endfor %}
-</p>
+    </tbody>
+</table>
+{{ pager() }}
+
 {% set word_ids = words | map(attribute='id') | join(',') %}
 <a href="/add_word?theme_id={{ theme.id }}" class="btn btn-sm btn-outline-primary mt-2">Add word</a>
-<a href="/test/flashcard?word_ids={{ word_ids }}&return_url=/words/{{ theme.id }}" class="btn btn-sm btn-outline-secondary mt-2">Test Flashcard</a>
-<a href="/test/typein?word_ids={{ word_ids }}&return_url=/words/{{ theme.id }}" class="btn btn-sm btn-outline-secondary mt-2">Test Type-in</a>
+{% if words %}
+<a href="/test/flashcard?word_ids={{ word_ids }}&return_url=/words/{{ theme.id }}%3Fpage%3D{{ page }}" class="btn btn-sm btn-outline-secondary mt-2">Test Flashcard</a>
+{% endif %}
 {% endblock %}

@@ -75,6 +75,8 @@ class Dictionary:
             self.translation = value['t']
             self.created_date = value.get('dc', _now_iso())
             self.modified_date = value.get('dm', _now_iso())
+            # The Android app's own scheduling fields: kept only so they round-trip unchanged.
+            # The web app's reviews live in leaftheme.json, never here.
             self.score = value.get('tm', 0)
             self.correct_answers = value.get('ca')
             self.review_interval = value.get('di')
@@ -91,31 +93,6 @@ class Dictionary:
 
         def __repr__(self):
             return f"<Word {self.word}>"
-
-        # SM-2 defaults
-        DEFAULT_EASE = 250  # 2.5 × 100
-
-        @property
-        def ease_factor(self):
-            """Ease factor as int (×100). Treats legacy/unset scores as default 250."""
-            if self.score is None or self.score < 130:
-                return self.DEFAULT_EASE
-            return self.score
-
-        @property
-        def repetitions(self):
-            return self.correct_answers or 0
-
-        @property
-        def interval_days(self):
-            return self.review_interval or 0
-
-        def is_due(self):
-            """True if this word is due for review (or has never been reviewed)."""
-            if self.review_date is None:
-                return True
-            due = _parse_iso(self.review_date)
-            return datetime.now(timezone.utc) >= due
 
         @staticmethod
         def sm2_calculate(ease_x100, repetitions, interval_days, quality):
@@ -153,12 +130,6 @@ class Dictionary:
                 ef = 1.3
 
             return round(ef * 100), reps, interval, _future_iso(interval)
-
-        def sm2_review(self, quality):
-            """Apply SM-2 algorithm to this word."""
-            self.score, self.correct_answers, self.review_interval, self.review_date = \
-                self.sm2_calculate(self.ease_factor, self.repetitions, self.interval_days, quality)
-            self.modified_date = _now_iso()
 
         def __eq__(self, other):
             return self.id == other.id
@@ -338,15 +309,6 @@ class Dictionary:
             'lword': lword,
             'listWordThemeAssociation': [{'idTheme': -1, 'idWord': -1}],
         }
-
-    def due_words(self, theme_id=None):
-        """Return words that are due for review, optionally filtered by theme."""
-        words = self.words.values()
-        if theme_id is not None:
-            if theme_id not in self.themes:
-                return []
-            words = self.themes[theme_id].words.values()
-        return [w for w in words if w.is_due()]
 
     def search(self, query):
         import re
