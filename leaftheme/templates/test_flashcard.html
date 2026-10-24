@@ -98,13 +98,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     function submitResults() {
-        fetch('/test/results', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({results: results, return_url: returnUrl})
-        })
-        .then(r => r.json())
-        .then(data => { window.location.href = data.redirect; });
+        window.location.href = returnUrl;
     }
 
     showWord();

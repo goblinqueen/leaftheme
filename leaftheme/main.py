@@ -180,6 +180,9 @@ def get_themes():
                                  themes=wt_dict.themes.values())
 
 
+TEST_SAMPLE_SIZE = 20  # words per flashcard test started from a theme page
+
+
 @app.route('/words/<theme_id>')
 def get_words(theme_id):
     file_name = flask.session.get('file_name', '_none_') + '/' + DICTIONARY_FILE_NAME
@@ -190,14 +193,14 @@ def get_words(theme_id):
     with open(file_name, encoding="utf8") as f:
         wt_dict = dictionary.Dictionary(json.load(f))
 
-    theme = wt_dict.themes[int(theme_id)]
-    out = []
-    for i, word in enumerate(sorted(theme.words.values())):
-        if i > 30:
-            break
-        out.append(word)
-    return flask.render_template('words.html',
-                                 menu_items=get_menu_items(), words=out, theme=theme)
+    theme = wt_dict.themes.get(int(theme_id))
+    if theme is None:
+        flask.abort(404)
+    words = list(theme.words.values())
+    sample = random.sample(words, min(TEST_SAMPLE_SIZE, len(words)))
+    return flask.render_template('words.html', menu_items=get_menu_items(), theme=theme,
+                                 word_count=len(words),
+                                 test_ids=','.join(str(w.id) for w in sample))
 
 
 @app.route('/add_word', methods=['GET', 'POST'])
@@ -280,10 +283,33 @@ def get_word(word_id):
 
 def _render_word(wt_dict, word, redirect_to, error=None):
     theme = wt_dict.themes[word.theme] if word.theme is not None else None
+    lt_data = _load_leaftheme()
+    reviews = [(label, _srs_view(lt_data.get(key, {}).get(word.uid)))
+               for label, key in (('Fi → Ru', 'forward_srs'), ('Ru → Fi', 'reverse_srs'))]
     return flask.render_template('word.html',
                                  menu_items=get_menu_items(), word=word, theme=theme,
                                  all_themes=wt_dict.themes.values(),
+                                 in_review=theme is not None and 'heaven' in theme.name.lower(),
+                                 reviews=reviews,
                                  redirect_to=redirect_to, error=error)
+
+
+def _srs_view(entry):
+    """Display values for one leaftheme.json SRS entry (None if the word was never reviewed)."""
+    if not entry or entry.get('dr') is None:
+        return None
+    from datetime import datetime, timezone
+    log = entry.get('log') or []
+    tm = entry.get('tm') or 0
+    return {
+        'ease': (tm / 100) if tm >= 130 else 2.5,
+        'reviews': len(log) if log else entry.get('ca'),
+        'interval': entry.get('di') or 0,
+        'next': entry['dr'],
+        'due': datetime.now(timezone.utc) >= dictionary._parse_iso(entry['dr']),
+        'last': log[-1]['dt'] if log else None,
+        'fails': entry.get('cf', 0),
+    }
 
 
 @app.route('/word/<int:word_id>/glosbe')
@@ -376,56 +402,13 @@ def _load_words_json(word_ids_str):
 @app.route('/test/flashcard')
 def test_flashcard():
     word_ids_str = flask.request.args.get('word_ids', '')
-    return_url = flask.request.args.get('return_url', '/themes')
+    return_url = _safe_next(flask.request.args.get('return_url')) or '/themes'
     words_json, err = _load_words_json(word_ids_str)
     if err:
         return err
     return flask.render_template('test_flashcard.html',
                                  menu_items=get_menu_items(),
                                  words_json=words_json, return_url=return_url)
-
-
-@app.route('/test/typein')
-def test_typein():
-    word_ids_str = flask.request.args.get('word_ids', '')
-    return_url = flask.request.args.get('return_url', '/themes')
-    words_json, err = _load_words_json(word_ids_str)
-    if err:
-        return err
-    return flask.render_template('test_typein.html',
-                                 menu_items=get_menu_items(),
-                                 words_json=words_json, return_url=return_url)
-
-
-@app.route('/test/check_answer', methods=['POST'])
-def test_check_answer():
-    from rapidfuzz import fuzz
-    data = flask.request.get_json()
-    word_id = int(data['word_id'])
-    answer = data['answer'].strip()
-
-    file_name = flask.session.get('file_name', '_none_') + '/' + DICTIONARY_FILE_NAME
-    with open(file_name, encoding="utf8") as f:
-        wt_dict = dictionary.Dictionary(json.load(f))
-
-    correct = wt_dict.words[word_id].word  # Finnish word is the expected answer
-    # Length guard: reject if answer length is too far from correct length
-    len_ratio = len(answer) / max(len(correct), 1)
-    if len_ratio < 0.5 or len_ratio > 1.5:
-        return flask.jsonify(matched=False, correct_answer=correct)
-
-    score = fuzz.ratio(answer.lower(), correct.lower())
-    matched = score >= 65
-    return flask.jsonify(matched=matched, correct_answer=correct)
-
-
-@app.route('/test/results', methods=['POST'])
-def test_results():
-    data = flask.request.get_json()
-    return_url = data.get('return_url', '/themes')
-    # Results stored in data['results'] as {word_id: rating}
-    # Score updates will be added when assessment/review flows are built
-    return flask.jsonify(status='ok', redirect=return_url)
 
 
 # --- Review (Spaced Repetition) flow ---

@@ -2,13 +2,8 @@
 
 {% block content %}
 <h2 class="mt-4">{{ theme.name }}</h2>
-<p>
-    {% for word in words %}
-    <a href="/word/{{ word.id }}">{{ word }}</a> <br />
-    {% endfor %}
-</p>
-{% set word_ids = words | map(attribute='id') | join(',') %}
+<p class="text-muted">{{ word_count }} word{{ 's' if word_count != 1 }}</p>
 <a href="/add_word?theme_id={{ theme.id }}" class="btn btn-sm btn-outline-primary mt-2">Add word</a>
-<a href="/test/flashcard?word_ids={{ word_ids }}&return_url=/words/{{ theme.id }}" class="btn btn-sm btn-outline-secondary mt-2">Test Flashcard</a>
-<a href="/test/typein?word_ids={{ word_ids }}&return_url=/words/{{ theme.id }}" class="btn btn-sm btn-outline-secondary mt-2">Test Type-in</a>
+{% if test_ids %}
+<a href="/test/flashcard?word_ids={{ test_ids }}&return_url=/words/{{ theme.id }}" class="btn btn-sm btn-outline-secondary mt-2">Test Flashcard</a>{% endif %}
 {% endblock %}
