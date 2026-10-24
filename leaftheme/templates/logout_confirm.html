@@ -1,0 +1,17 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<h2 class="mt-4">Log out?</h2>
+<p>You have changes here that aren't on Google Drive yet. Logging out deletes them.</p>
+<div class="d-flex flex-wrap gap-2 mt-3">
+    <form method="post" action="/sync" class="js-sync-form">
+        <input type="hidden" name="next" value="/clear">
+        <button type="submit" class="btn btn-primary">Sync, then log out</button>
+    </form>
+    <form method="post" action="/clear">
+        <input type="hidden" name="discard" value="1">
+        <button type="submit" class="btn btn-outline-danger">Log out anyway</button>
+    </form>
+    <a href="/themes" class="btn btn-link">Cancel</a>
+</div>
+{% endblock %}

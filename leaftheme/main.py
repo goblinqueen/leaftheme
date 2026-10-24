@@ -1049,8 +1049,15 @@ def oauth2callback():
     return flask.redirect(next_url or flask.url_for('sync_with_drive'))
 
 
-@app.route('/clear')
+@app.route('/clear', methods=['GET', 'POST'])
 def clear_credentials():
+    """Logout: forget the credentials and delete the session's local files.
+
+    With changes that haven't reached Drive, asks first (sync then log out, or discard)."""
+    discard = flask.request.method == 'POST' and flask.request.form.get('discard')
+    if _has_unsaved() and not discard:
+        return flask.render_template('logout_confirm.html', menu_items=get_menu_items())
+
     if 'credentials' in flask.session:
         del flask.session['credentials']
     if 'file_name' in flask.session:
@@ -1062,7 +1069,7 @@ def clear_credentials():
                     os.rmdir(os.path.join(root, name))
             os.removedirs(flask.session['file_name'])
         del flask.session['file_name']
-    return flask.render_template('index.html', menu_items=get_menu_items())
+    return flask.render_template('index.html', menu_items=get_menu_items(), logged_out=True)
 
 
 def _client_config():
