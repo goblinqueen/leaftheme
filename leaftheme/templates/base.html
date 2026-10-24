@@ -102,9 +102,11 @@
         // Heroku restart (see restore.html). Only ever written right after a sync.
         (function () {
             try {
-                // Drop the old-format cache (it could hold unsynced or stale copies)
+                // Drop the old-format cache (it could hold unsynced or stale copies),
+                // and after logout this browser's backups too
+                var drop = {{ 'true' if logged_out else 'false' }} ? /^wt_([dlum]|backup)_/ : /^wt_[dlum]_/;
                 Object.keys(localStorage).forEach(function (k) {
-                    if (/^wt_[dlum]_/.test(k)) localStorage.removeItem(k);
+                    if (drop.test(k)) localStorage.removeItem(k);
                 });
             } catch (e) {}
             var sid = {{ session.get('file_name') | tojson }};
