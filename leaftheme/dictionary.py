@@ -1,4 +1,3 @@
-import json
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -289,37 +288,3 @@ class Dictionary:
         for theme in self.themes.values():
             results += theme.search(query, reverse=reverse)
         return sorted(results, reverse=True)[:10]
-
-
-def main():
-    import sys
-    sys.stdout.reconfigure(encoding='utf-8')
-    path = "../004dd37d-cba6-4186-8dd6-158c3c0b20b8/dictionary.txt"
-    with open(path, encoding="utf8") as f:
-        dictionary = Dictionary(json.load(f))
-
-    # Test: add a word to the first theme
-    theme = next(iter(dictionary.themes.values()))
-    new_word = dictionary.add_word(theme.id, "test_main_FI_2", "test_main_RU_2")
-    print(f"Added word: {new_word!r} to theme '{theme}' (id={new_word.id})")
-
-    # Write back
-    with open(path, "w", encoding="utf8") as f:
-        json.dump(dictionary.to_dict(), f, ensure_ascii=False)
-    print(f"Saved to {path}")
-
-    # Verify round-trip
-    with open(path, encoding="utf8") as f:
-        d2 = Dictionary(json.load(f))
-    assert new_word.word in d2.themes[theme.id].words, "Word not found after round-trip!"
-    print("Round-trip OK")
-
-    print("\nLeast known 30 words from theme {}:\n".format(theme.name))
-    for i, word in enumerate(sorted(theme.words.values())):
-        if i > 30:
-            break
-        print(word)
-
-
-if __name__ == '__main__':
-    main()

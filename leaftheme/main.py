@@ -1,22 +1,15 @@
 import html as _html
-import io
 import json
 import os
 import random
-import struct
-import zipfile
 from datetime import timedelta
 from urllib.parse import quote_plus
 
 import flask
 
-import google.oauth2.credentials
-from google.auth.exceptions import RefreshError
 import google_auth_oauthlib.flow
-import googleapiclient.discovery
-import googleapiclient.http
-from googleapiclient.discovery import build
 from . import dictionary
+from . import drive
 import re
 from glosbe import GlosbeTranslator
 
@@ -33,9 +26,9 @@ def _pick_glosbe(word):
 
 PROJECT_ID = "goblin-queendom"
 
-DICTIONARY_FILE_NAME = 'dictionary.txt'
-LEAFTHEME_FILE_NAME = 'leaftheme.json'
-REMOVED_FILE_NAME = 'removed.txt'
+DICTIONARY_FILE_NAME = drive.DICTIONARY_FILE_NAME
+LEAFTHEME_FILE_NAME = drive.LEAFTHEME_FILE_NAME
+REMOVED_FILE_NAME = drive.REMOVED_FILE_NAME
 EMPTY_LEAFTHEME = {"version": 1, "forward_srs": {}, "reverse_srs": {}}
 
 SCOPES = ['https://www.googleapis.com/auth/drive.metadata.readonly',
@@ -44,8 +37,6 @@ SCOPES = ['https://www.googleapis.com/auth/drive.metadata.readonly',
           "https://www.googleapis.com/auth/drive.metadata"
           ]
 
-API_SERVICE_NAME = 'drive'
-API_VERSION = 'v3'
 os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
 
 app = flask.Flask(__name__)
@@ -76,84 +67,19 @@ def load_dictionary():
     if _has_unsaved() and not flask.request.args.get('force'):
         return flask.render_template('unsaved_warning.html', menu_items=get_menu_items())
 
-    if 'credentials' not in flask.session:
-        return flask.redirect('authorize')
+    if 'credentials' not in flask.session or 'file_name' not in flask.session:
+        return flask.redirect(flask.url_for('authorize'))
 
     try:
-        credentials = google.oauth2.credentials.Credentials(
-            **flask.session['credentials'])
-
-        drive = build(API_SERVICE_NAME, API_VERSION, credentials=credentials)
-
-        query = ("mimeType = 'application/vnd.google-apps.folder' " +
-                 "and name = 'WordTheme' and 'root' in parents and trashed=false")
-
-        fields = 'files(id, name, mimeType, modifiedTime)'
-
-        wt_folders = drive.files().list(q=query, fields=fields).execute()
-        wt_folders = wt_folders.get("files", [])
-
-        if not wt_folders:
-            return "No WordTheme folders found."
-
-        dict_file = None
-
-        for item in wt_folders:
-            query = "mimeType = 'application/zip' " \
-                     "and name contains '.wt' " \
-                     "and '{}' in parents " \
-                     "and trashed=false".format(item['id'])
-            results = (
-                drive.files().list(q=query, fields=fields).execute()
-            )
-            child_items = results.get("files", [])
-            for child_item in child_items:
-                if not dict_file or child_item['modifiedTime'] > dict_file['modifiedTime']:
-                    dict_file = child_item
-
-        flask.session['dict_file_id'] = dict_file['id']
-        flask.session['wt_folder_id'] = wt_folders[0]['id']
-
-        request = drive.files().get_media(fileId=dict_file['id'])
-        file = io.BytesIO()
-        downloader = googleapiclient.http.MediaIoBaseDownload(file, request)
-        done = False
-        while done is False:
-            status, done = downloader.next_chunk()
-        os.makedirs(flask.session['file_name'], exist_ok=True)
-        file_name = f'{flask.session['file_name']}/dictionary.zip'
-        with open(file_name, 'wb') as f:
-            f.write(file.getvalue())
-        with zipfile.ZipFile(file_name, 'r') as zip_file:
-            zip_file.extract(DICTIONARY_FILE_NAME, flask.session['file_name'])
-
-        # Download leaftheme.json (reverse SRS data) from same folder
-        lt_query = ("name = 'leaftheme.json'"
-                    " and '{}' in parents"
-                    " and trashed=false".format(wt_folders[0]['id']))
-        lt_results = drive.files().list(q=lt_query, fields=fields).execute()
-        lt_files = lt_results.get("files", [])
-        lt_path = os.path.join(flask.session['file_name'], LEAFTHEME_FILE_NAME)
-        if lt_files:
-            flask.session['leaftheme_file_id'] = lt_files[0]['id']
-            lt_request = drive.files().get_media(fileId=lt_files[0]['id'])
-            lt_buf = io.BytesIO()
-            lt_dl = googleapiclient.http.MediaIoBaseDownload(lt_buf, lt_request)
-            lt_done = False
-            while not lt_done:
-                _, lt_done = lt_dl.next_chunk()
-            with open(lt_path, 'wb') as f:
-                f.write(lt_buf.getvalue())
-        else:
-            flask.session['leaftheme_file_id'] = None
-            with open(lt_path, 'w', encoding='utf-8') as f:
-                json.dump(EMPTY_LEAFTHEME, f)
-
-    except RefreshError:
-        return flask.redirect(flask.url_for('clear_credentials'))
+        d = _drive()
+        _download_to_session(d, d.locate(flask.session.get('dict_file_id')))
+        _keep_credentials(d)
+    except drive.NeedsLogin:
+        return _login(flask.url_for('load_dictionary', **flask.request.args))
+    except drive.DriveFailure as e:
+        return _drive_error(e)
 
     _clear_unsaved()
-    _clear_removed()
     return flask.render_template('loaded.html', menu_items=get_menu_items())
 
 
@@ -521,17 +447,11 @@ def review_apply():
     # Save both files to Drive and clear the unsaved flag
     try:
         if 'credentials' in flask.session:
-            save_dictionary_to_drive(
-                flask.session['credentials'],
-                flask.session['dict_file_id'],
-                flask.session['file_name']
-            )
-            save_leaftheme_to_drive(
-                flask.session['credentials'],
-                flask.session.get('leaftheme_file_id'),
-                flask.session.get('wt_folder_id'),
-                flask.session['file_name']
-            )
+            d = _drive()
+            save_dictionary_to_drive(d, flask.session['dict_file_id'], flask.session['file_name'])
+            save_leaftheme_to_drive(d, flask.session.get('leaftheme_file_id'),
+                                    flask.session.get('wt_folder_id'), flask.session['file_name'])
+            _keep_credentials(d)
             _clear_unsaved()
     except Exception:
         pass  # Don't break the review if Drive save fails
@@ -573,42 +493,61 @@ def review_saved():
                                  continue_url=flask.url_for('review_start', **continue_args))
 
 
-def _fetch_from_drive():
-    """Re-download dict + leaftheme from Drive using IDs already stored in the session.
-    Called automatically on dyno cold-start when temp files are missing."""
-    credentials = google.oauth2.credentials.Credentials(**flask.session['credentials'])
-    drive = build(API_SERVICE_NAME, API_VERSION, credentials=credentials)
+def _drive():
+    """Drive client for the logged-in user. Raises drive.NeedsLogin without credentials."""
+    if 'credentials' not in flask.session:
+        raise drive.NeedsLogin()
+    return drive.Drive(flask.session['credentials'])
 
-    # Download .wt zip directly using the stored file ID (no folder search needed)
-    request = drive.files().get_media(fileId=flask.session['dict_file_id'])
-    file = io.BytesIO()
-    downloader = googleapiclient.http.MediaIoBaseDownload(file, request)
-    done = False
-    while not done:
-        _, done = downloader.next_chunk()
-    os.makedirs(flask.session['file_name'], exist_ok=True)
-    zip_path = f'{flask.session["file_name"]}/dictionary.zip'
-    with open(zip_path, 'wb') as f:
-        f.write(file.getvalue())
-    with zipfile.ZipFile(zip_path, 'r') as zip_file:
-        zip_file.extract(DICTIONARY_FILE_NAME, flask.session['file_name'])
 
-    # Download leaftheme.json
-    lt_path = os.path.join(flask.session['file_name'], LEAFTHEME_FILE_NAME)
-    if flask.session.get('leaftheme_file_id'):
-        lt_request = drive.files().get_media(fileId=flask.session['leaftheme_file_id'])
-        lt_buf = io.BytesIO()
-        lt_dl = googleapiclient.http.MediaIoBaseDownload(lt_buf, lt_request)
-        lt_done = False
-        while not lt_done:
-            _, lt_done = lt_dl.next_chunk()
+def _keep_credentials(d):
+    """Store the (possibly refreshed) token back into the session."""
+    flask.session['credentials'] = d.session_credentials()
+
+
+def _login(next_url):
+    """Send the user through OAuth, then back to next_url. Local session files are kept."""
+    flask.session['oauth_next'] = next_url
+    return flask.redirect(flask.url_for('authorize'))
+
+
+def _drive_error(error):
+    return flask.render_template('drive_error.html', menu_items=get_menu_items(),
+                                 message=str(error)), 502
+
+
+def _download_to_session(d, location):
+    """Download the .wt and leaftheme.json at location into the session dir.
+
+    Both files are fetched before anything is written, so a failed download leaves
+    the local copy untouched."""
+    dict_bytes = drive.read_wt(d.download(location.wt_id))
+    lt_bytes = d.download(location.lt_id) if location.lt_id else None
+
+    session_dir = flask.session['file_name']
+    os.makedirs(session_dir, exist_ok=True)
+    with open(os.path.join(session_dir, DICTIONARY_FILE_NAME), 'wb') as f:
+        f.write(dict_bytes)
+    lt_path = os.path.join(session_dir, LEAFTHEME_FILE_NAME)
+    if lt_bytes is not None:
         with open(lt_path, 'wb') as f:
-            f.write(lt_buf.getvalue())
+            f.write(lt_bytes)
     else:
         with open(lt_path, 'w', encoding='utf-8') as f:
             json.dump(EMPTY_LEAFTHEME, f)
 
+    flask.session['dict_file_id'] = location.wt_id
+    flask.session['wt_folder_id'] = location.folder_id
+    flask.session['leaftheme_file_id'] = location.lt_id
     _clear_removed()
+
+
+def _fetch_from_drive():
+    """Re-download dict + leaftheme from Drive using IDs already stored in the session.
+    Called automatically on dyno cold-start when temp files are missing."""
+    d = _drive()
+    _download_to_session(d, d.locate(flask.session['dict_file_id']))
+    _keep_credentials(d)
 
 
 def _load_dictionary():
@@ -1022,43 +961,33 @@ def api_fetch_from_drive():
     try:
         _fetch_from_drive()
         return flask.jsonify({'ok': True})
-    except RefreshError:
+    except drive.NeedsLogin:
         return flask.jsonify({'error': 'auth_expired'}), 401
-    except Exception as e:
+    except drive.DriveFailure as e:
         return flask.jsonify({'error': str(e)}), 500
 
 
 @app.route('/save_dictionary')
 def save_dictionary():
     if 'credentials' not in flask.session:
-        flask.session['oauth_next'] = flask.url_for('save_dictionary')
-        return flask.redirect('authorize')
+        return _login(flask.url_for('save_dictionary'))
     if 'dict_file_id' not in flask.session:
-        return flask.redirect('load_dictionary')
+        return flask.redirect(flask.url_for('load_dictionary'))
 
-    file_name = flask.session.get('file_name', '_none_') + '/' + DICTIONARY_FILE_NAME
-    if not os.path.exists(file_name):
-        return flask.redirect('load_dictionary')
-
-    file_name = flask.session.get('file_name', '_none_') + '/' + DICTIONARY_FILE_NAME
-    with open(file_name, encoding="utf8") as f:
-        wt_dict = dictionary.Dictionary(json.load(f))
+    wt_dict, _ = _load_dictionary()
+    if wt_dict is None:
+        return flask.redirect(flask.url_for('load_dictionary'))
 
     try:
-        save_dictionary_to_drive(
-            flask.session['credentials'],
-            flask.session['dict_file_id'],
-            flask.session['file_name']
-        )
-        save_leaftheme_to_drive(
-            flask.session['credentials'],
-            flask.session.get('leaftheme_file_id'),
-            flask.session.get('wt_folder_id'),
-            flask.session['file_name']
-        )
-    except RefreshError:
-        flask.session['oauth_next'] = flask.url_for('save_dictionary')
-        return flask.redirect('authorize')
+        d = _drive()
+        save_dictionary_to_drive(d, flask.session['dict_file_id'], flask.session['file_name'])
+        save_leaftheme_to_drive(d, flask.session.get('leaftheme_file_id'),
+                                flask.session.get('wt_folder_id'), flask.session['file_name'])
+        _keep_credentials(d)
+    except drive.NeedsLogin:
+        return _login(flask.url_for('save_dictionary'))
+    except drive.DriveFailure as e:
+        return _drive_error(e)
 
     _clear_unsaved()
     _clear_removed()
@@ -1079,25 +1008,7 @@ def authorize():
             os.makedirs(file_name)
         flask.session['file_name'] = file_name
 
-    flow = google_auth_oauthlib.flow.Flow.from_client_config(
-        {
-            "web": {
-                "client_id": os.environ['G_CLIENT_ID'],
-                "project_id": "goblin-queendom",
-                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-                "token_uri": "https://oauth2.googleapis.com/token",
-                "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
-                "client_secret": os.environ['G_CLIENT_SECRET'],
-                "redirect_uris": [
-                    "https://leaftheme-df31c6a9a848.herokuapp.com/oauth"
-                ],
-                "javascript_origins": [
-                    "https://leaftheme-df31c6a9a848.herokuapp.com"
-                ]
-            }
-        }
-        , scopes=SCOPES)
-
+    flow = google_auth_oauthlib.flow.Flow.from_client_config(_client_config(), scopes=SCOPES)
     flow.redirect_uri = flask.url_for('oauth2callback', _external=True)
 
     authorization_url, state = flow.authorization_url(
@@ -1105,7 +1016,10 @@ def authorize():
         # re-prompting the user for permission. Recommended for web server apps.
         access_type='offline',
         # Enable incremental authorization. Recommended as a best practice.
-        include_granted_scopes='true')
+        include_granted_scopes='true',
+        # Google only returns a refresh token on consent; without this a repeat login
+        # yields credentials that stop working once the access token expires.
+        prompt='consent')
 
     flask.session['state'] = state
     flask.session['code_verifier'] = flow.code_verifier
@@ -1117,25 +1031,15 @@ def authorize():
 def oauth2callback():
     state = flask.session['state']
 
-    flow = google_auth_oauthlib.flow.Flow.from_client_config(
-        {
-            "web": {
-                "client_id": os.environ['G_CLIENT_ID'],
-                "project_id": PROJECT_ID,
-                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-                "token_uri": "https://oauth2.googleapis.com/token",
-                "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
-                "client_secret": os.environ['G_CLIENT_SECRET']
-            }
-        }, scopes=SCOPES, state=state)
+    flow = google_auth_oauthlib.flow.Flow.from_client_config(_client_config(), scopes=SCOPES,
+                                                             state=state)
     flow.redirect_uri = flask.url_for('oauth2callback', _external=True)
 
     authorization_response = flask.request.url
     flow.fetch_token(authorization_response=authorization_response,
                      code_verifier=flask.session['code_verifier'])
 
-    credentials = flow.credentials
-    flask.session['credentials'] = credentials_to_dict(credentials)
+    flask.session['credentials'] = drive.credentials_to_session(flow.credentials)
     flask.session.permanent = True
 
     next_url = flask.session.pop('oauth_next', None)
@@ -1158,60 +1062,21 @@ def clear_credentials():
     return flask.render_template('index.html', menu_items=get_menu_items())
 
 
-def credentials_to_dict(credentials):
-    return {'token': credentials.token,
-            'refresh_token': credentials.refresh_token,
-            'token_uri': credentials.token_uri,
-            'client_id': credentials.client_id,
-            'client_secret': credentials.client_secret,
-            'scopes': credentials.scopes}
+def _client_config():
+    return {
+        "web": {
+            "client_id": os.environ['G_CLIENT_ID'],
+            "project_id": PROJECT_ID,
+            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+            "token_uri": drive.TOKEN_URI,
+            "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+            "client_secret": os.environ['G_CLIENT_SECRET'],
+        }
+    }
 
 
-def _fix_zip_for_android(data):
-    """Patch a zip so Android's ZipInputStream can read it.
-
-    Two fixes:
-    1. Clear the data-descriptor flag (bit 3) from flag_bits.  Python's
-       zipfile sets bit 3 but fills CRC/sizes in the local header and does
-       NOT write a data descriptor record.  Android sees bit 3, ignores the
-       local header sizes, then fails looking for a data descriptor.
-    2. Zero external_attr in central directory entries.  Python writes OS
-       file permissions (e.g. 0x81b60000) which the app doesn't expect;
-       the original app-generated zips use 0x00000000.
-    """
-    data = bytearray(data)
-    DATA_DESC_FLAG = 0x0008
-
-    # Patch local file headers (signature PK\x03\x04, flags at offset +6)
-    pos = 0
-    while True:
-        pos = data.find(b'PK\x03\x04', pos)
-        if pos == -1:
-            break
-        flags = struct.unpack_from('<H', data, pos + 6)[0]
-        if flags & DATA_DESC_FLAG:
-            struct.pack_into('<H', data, pos + 6, flags & ~DATA_DESC_FLAG)
-        pos += 4
-
-    # Patch central directory headers (signature PK\x01\x02)
-    pos = 0
-    while True:
-        pos = data.find(b'PK\x01\x02', pos)
-        if pos == -1:
-            break
-        # Clear data-descriptor flag (offset +8)
-        flags = struct.unpack_from('<H', data, pos + 8)[0]
-        if flags & DATA_DESC_FLAG:
-            struct.pack_into('<H', data, pos + 8, flags & ~DATA_DESC_FLAG)
-        # Zero external_attr (offset +38)
-        struct.pack_into('<I', data, pos + 38, 0)
-        pos += 4
-
-    return bytes(data)
-
-
-def save_dictionary_to_drive(credentials_dict, file_id, session_dir):
-    """Zip dictionary.txt from session_dir and upload it to Drive, overwriting file_id."""
+def save_dictionary_to_drive(d, file_id, session_dir):
+    """Zip dictionary.txt (+ removed.txt) from session_dir and upload it to Drive, overwriting file_id."""
     dict_path = os.path.join(session_dir, DICTIONARY_FILE_NAME)
     if not os.path.exists(dict_path):
         raise FileNotFoundError(f"No {DICTIONARY_FILE_NAME} in {session_dir}")
@@ -1221,53 +1086,36 @@ def save_dictionary_to_drive(credentials_dict, file_id, session_dir):
         dict_data = json.load(f)
     dict_bytes = json.dumps(dict_data, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
 
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
-        dict_info = zipfile.ZipInfo(DICTIONARY_FILE_NAME)
-        dict_info.compress_type = zipfile.ZIP_DEFLATED
-        zf.writestr(dict_info, dict_bytes)
-        # removed.txt — carries pending deletions so the Android app removes them on next sync
-        removed_path = os.path.join(session_dir, REMOVED_FILE_NAME)
-        removed_bytes = open(removed_path, 'rb').read() if os.path.exists(removed_path) else b''
-        removed_info = zipfile.ZipInfo('removed.txt')
-        removed_info.compress_type = zipfile.ZIP_DEFLATED
-        zf.writestr(removed_info, removed_bytes)
+    # removed.txt — carries pending deletions so the Android app removes them on next sync
+    removed_path = os.path.join(session_dir, REMOVED_FILE_NAME)
+    removed_bytes = b''
+    if os.path.exists(removed_path):
+        with open(removed_path, 'rb') as f:
+            removed_bytes = f.read()
 
-    # Fix zip for Android compatibility
-    fixed = _fix_zip_for_android(buf.getvalue())
+    wt_bytes = drive.build_wt(dict_bytes, removed_bytes)
 
     # Save .wt locally for sideloading/debugging
-    wt_path = os.path.join(session_dir, 'dictionary.wt')
-    with open(wt_path, 'wb') as f:
-        f.write(fixed)
+    with open(os.path.join(session_dir, 'dictionary.wt'), 'wb') as f:
+        f.write(wt_bytes)
 
-    upload_buf = io.BytesIO(fixed)
-    credentials = google.oauth2.credentials.Credentials(**credentials_dict)
-    drive = build(API_SERVICE_NAME, API_VERSION, credentials=credentials)
-    media = googleapiclient.http.MediaIoBaseUpload(upload_buf, mimetype='application/zip')
-    drive.files().update(fileId=file_id, media_body=media).execute()
+    d.update(file_id, wt_bytes, 'application/zip')
 
 
-def save_leaftheme_to_drive(credentials_dict, file_id, folder_id, session_dir):
+def save_leaftheme_to_drive(d, file_id, folder_id, session_dir):
     """Upload leaftheme.json to Drive (create if new, update if exists)."""
     lt_path = os.path.join(session_dir, LEAFTHEME_FILE_NAME)
     if not os.path.exists(lt_path):
         return
 
-    with open(lt_path, encoding='utf-8') as f:
-        lt_bytes = f.read().encode('utf-8')
-
-    credentials = google.oauth2.credentials.Credentials(**credentials_dict)
-    drive = build(API_SERVICE_NAME, API_VERSION, credentials=credentials)
-    media = googleapiclient.http.MediaIoBaseUpload(
-        io.BytesIO(lt_bytes), mimetype='application/json')
+    with open(lt_path, 'rb') as f:
+        lt_bytes = f.read()
 
     if file_id:
-        drive.files().update(fileId=file_id, media_body=media).execute()
+        d.update(file_id, lt_bytes, 'application/json')
     elif folder_id:
-        metadata = {'name': LEAFTHEME_FILE_NAME, 'parents': [folder_id]}
-        result = drive.files().create(body=metadata, media_body=media).execute()
-        flask.session['leaftheme_file_id'] = result['id']
+        flask.session['leaftheme_file_id'] = d.create(folder_id, LEAFTHEME_FILE_NAME, lt_bytes,
+                                                      'application/json')
 
 
 def get_menu_items():

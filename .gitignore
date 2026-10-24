@@ -5,7 +5,9 @@ dictionary.txt
 /leaftheme/dictionary.txt
 CLAUDE.md
 /tests
+/tools
 /.claude
+/.venv
 dev.env
 __pycache__
 history.json
