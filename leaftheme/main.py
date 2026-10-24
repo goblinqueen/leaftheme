@@ -3,7 +3,7 @@ import json
 import os
 import random
 from datetime import timedelta
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, urlsplit
 
 import flask
 
@@ -219,7 +219,7 @@ def add_word():
         theme_id = int(flask.request.form['theme_id'])
         word_str = flask.request.form['word'].strip()
         translation = flask.request.form['translation'].strip()
-        redirect_to = flask.request.form.get('redirect_to', '')
+        redirect_to = _safe_next(flask.request.form.get('redirect_to')) or ''
 
         existing = wt_dict.find_spelling(word_str)
         if existing:
@@ -243,7 +243,7 @@ def add_word():
 
     preselected = flask.request.args.get('theme_id', type=int)
     prefill_word = flask.request.args.get('word', '')
-    redirect_to = flask.request.args.get('redirect_to', '')
+    redirect_to = _safe_next(flask.request.args.get('redirect_to')) or ''
     return flask.render_template('add_word.html',
                                  menu_items=get_menu_items(),
                                  themes=wt_dict.themes.values(),
@@ -266,7 +266,7 @@ def get_word(word_id):
         new_word = flask.request.form.get('word', '').strip()
         new_translation = flask.request.form.get('translation', '').strip()
         new_theme_id = flask.request.form.get('theme_id', type=int)
-        redirect_to = flask.request.form.get('redirect_to', '').strip()
+        redirect_to = _safe_next(flask.request.form.get('redirect_to')) or ''
         clash = wt_dict.find_spelling(new_word, exclude_uid=word.uid) if new_word else None
         if clash is not None:
             clash_theme = wt_dict.themes.get(clash.theme)
@@ -279,7 +279,8 @@ def get_word(word_id):
         _save_dictionary(wt_dict, file_name)
         return flask.redirect(redirect_to or flask.url_for('get_word', word_id=word_id))
 
-    redirect_to = flask.request.args.get('redirect_to', '').strip() or flask.request.referrer or ''
+    redirect_to = (_safe_next(flask.request.args.get('redirect_to'))
+                   or _safe_next(flask.request.referrer) or '')
     return _render_word(wt_dict, word, redirect_to)
 
 
@@ -351,7 +352,7 @@ def delete_word(word_id):
     if word is None:
         flask.abort(404)
     theme_id = word.theme
-    redirect_to = flask.request.form.get('redirect_to', '').strip()
+    redirect_to = _safe_next(flask.request.form.get('redirect_to')) or ''
     _append_removed(word)
     wt_dict.remove_word(word_id)
     _save_dictionary(wt_dict, file_name)
@@ -589,10 +590,21 @@ def _run_sync():
 
 
 def _safe_next(url):
-    """Only allow local paths as a post-sync destination."""
-    if url and url.startswith('/') and not url.startswith('//'):
-        return url
-    return None
+    """Return url as a path on this site, or None if it points anywhere else.
+
+    Used for every user-supplied redirect target (next, redirect_to, return_url, Referer).
+    Accepts local paths and full URLs on this same host (e.g. the Referer header)."""
+    if not url:
+        return None
+    parts = urlsplit(url.strip())
+    if parts.scheme or parts.netloc:
+        if parts.scheme not in ('http', 'https') or parts.netloc != flask.request.host:
+            return None
+    path = parts.path
+    # '//host' and '/\host' are treated as other sites by browsers
+    if not path.startswith('/') or path.startswith('//') or path.startswith('/\\'):
+        return None
+    return path + ('?' + parts.query if parts.query else '')
 
 
 def _missing_dictionary():
