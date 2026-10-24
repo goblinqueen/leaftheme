@@ -10,6 +10,7 @@ import flask
 import google_auth_oauthlib.flow
 from . import dictionary
 from . import drive
+from . import store
 import re
 from glosbe import GlosbeTranslator
 
@@ -132,8 +133,7 @@ def add_word():
         translation = flask.request.form['translation'].strip()
         redirect_to = flask.request.form.get('redirect_to', '')
 
-        existing = next((w for w in wt_dict.words.values()
-                         if w.word.lower() == word_str.lower()), None)
+        existing = wt_dict.find_spelling(word_str)
         if existing:
             existing_theme = wt_dict.themes.get(existing.theme)
             error = f'"{existing.word}" already exists' + (
@@ -148,9 +148,7 @@ def add_word():
                                          error=error)
 
         wt_dict.add_word(theme_id, word_str, translation)
-        with open(file_name, 'w', encoding='utf8') as f:
-            json.dump(wt_dict.to_dict(), f, ensure_ascii=False, separators=(',', ':'))
-        _mark_unsaved()
+        _save_dictionary(wt_dict, file_name)
         if redirect_to:
             return flask.redirect(redirect_to)
         return flask.redirect(flask.url_for('get_words', theme_id=theme_id))
@@ -193,6 +191,12 @@ def get_word(word_id):
         new_translation = flask.request.form.get('translation', '').strip()
         new_theme_id = flask.request.form.get('theme_id', type=int)
         redirect_to = flask.request.form.get('redirect_to', '').strip()
+        clash = wt_dict.find_spelling(new_word, exclude_uid=word.uid) if new_word else None
+        if clash is not None:
+            clash_theme = wt_dict.themes.get(clash.theme)
+            error = f'"{clash.word}" already exists' + (
+                f' in {clash_theme.name}' if clash_theme else '') + ' — nothing was saved.'
+            return _render_word(wt_dict, word, redirect_to, error=error)
         wt_dict.edit_word(word_id, new_word, new_translation)
         if new_theme_id is not None and new_theme_id != word.theme:
             wt_dict.move_word(word_id, new_theme_id)
@@ -200,11 +204,15 @@ def get_word(word_id):
         return flask.redirect(redirect_to or flask.url_for('get_word', word_id=word_id))
 
     redirect_to = flask.request.args.get('redirect_to', '').strip() or flask.request.referrer or ''
+    return _render_word(wt_dict, word, redirect_to)
+
+
+def _render_word(wt_dict, word, redirect_to, error=None):
     theme = wt_dict.themes[word.theme] if word.theme is not None else None
     return flask.render_template('word.html',
                                  menu_items=get_menu_items(), word=word, theme=theme,
                                  all_themes=wt_dict.themes.values(),
-                                 redirect_to=redirect_to)
+                                 redirect_to=redirect_to, error=error)
 
 
 @app.route('/word/<int:word_id>/glosbe')
@@ -629,11 +637,13 @@ def _mark_unsaved():
 
 
 def _clear_unsaved():
+    """Local copy now matches Drive: drop the unsaved marker and the change log."""
     session_dir = flask.session.get('file_name')
     if session_dir:
         path = os.path.join(session_dir, UNSAVED_MARKER)
         if os.path.exists(path):
             os.remove(path)
+        store.clear_ops(session_dir)
 
 
 def _has_unsaved():
@@ -644,9 +654,11 @@ def _has_unsaved():
 
 
 def _save_dictionary(wt_dict, file_name):
-    """Write dictionary back to the session file and mark as unsaved."""
-    with open(file_name, 'w', encoding='utf8') as f:
-        json.dump(wt_dict.to_dict(), f, ensure_ascii=False, separators=(',', ':'))
+    """Write dictionary back to the session file, append its changes to the log, mark as unsaved."""
+    store.atomic_write(file_name, json.dumps(wt_dict.to_dict(), ensure_ascii=False,
+                                             separators=(',', ':')))
+    store.append_ops(os.path.dirname(file_name), wt_dict.ops)
+    wt_dict.ops.clear()
     _mark_unsaved()
 
 
