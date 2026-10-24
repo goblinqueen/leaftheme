@@ -177,7 +177,10 @@ def get_themes():
     with open(file_name, encoding="utf8") as f:
         wt_dict = dictionary.Dictionary(json.load(f))
     return flask.render_template('themes.html', menu_items=get_menu_items(),
-                                 themes=wt_dict.themes.values())
+                                 themes=sorted(wt_dict.themes.values(), key=lambda t: t.name.lower()))
+
+
+WORDS_PER_PAGE = 30
 
 
 @app.route('/words/<theme_id>')
@@ -190,14 +193,16 @@ def get_words(theme_id):
     with open(file_name, encoding="utf8") as f:
         wt_dict = dictionary.Dictionary(json.load(f))
 
-    theme = wt_dict.themes[int(theme_id)]
-    out = []
-    for i, word in enumerate(sorted(theme.words.values())):
-        if i > 30:
-            break
-        out.append(word)
-    return flask.render_template('words.html',
-                                 menu_items=get_menu_items(), words=out, theme=theme)
+    theme = wt_dict.themes.get(int(theme_id))
+    if theme is None:
+        flask.abort(404)
+    words = sorted(theme.words.values(), key=lambda w: w.created_date or '', reverse=True)
+    pages = max(1, -(-len(words) // WORDS_PER_PAGE))
+    page = min(max(flask.request.args.get('page', 1, type=int), 1), pages)
+    start = (page - 1) * WORDS_PER_PAGE
+    return flask.render_template('words.html', menu_items=get_menu_items(), theme=theme,
+                                 words=words[start:start + WORDS_PER_PAGE],
+                                 word_count=len(words), page=page, pages=pages)
 
 
 @app.route('/add_word', methods=['GET', 'POST'])

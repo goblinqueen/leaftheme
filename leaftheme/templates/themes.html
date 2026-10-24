@@ -6,7 +6,7 @@
     <tbody>
     {% for x in themes %}
     <tr>
-        <td>{{ x.name }}</td>
+        <td><a href="/words/{{ x.id }}">{{ x.name }}</a></td>
         <td class="text-end text-muted">{{ x.word_count() }} word{{ 's' if x.word_count() != 1 }}</td>
         <td class="text-end"><a href="/add_word?theme_id={{ x.id }}">add word</a></td>
     </tr>
