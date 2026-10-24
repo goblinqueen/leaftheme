@@ -1,0 +1,14 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<h2 class="mt-4">Sync with Drive</h2>
+{% if unsynced %}
+<p>You have changes here that aren't on Google Drive yet.</p>
+{% else %}
+<p class="text-muted">Everything is up to date.</p>
+{% endif %}
+<form method="post" action="/sync" class="js-sync-form">
+    {% if next_url %}<input type="hidden" name="next" value="{{ next_url }}">{% endif %}
+    <button type="submit" class="btn btn-primary">Sync now</button>
+</form>
+{% endblock %}

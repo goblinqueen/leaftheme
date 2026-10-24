@@ -11,6 +11,7 @@ import google_auth_oauthlib.flow
 from . import dictionary
 from . import drive
 from . import store
+from . import sync as sync_engine
 import re
 from glosbe import GlosbeTranslator
 
@@ -30,7 +31,7 @@ PROJECT_ID = "goblin-queendom"
 DICTIONARY_FILE_NAME = drive.DICTIONARY_FILE_NAME
 LEAFTHEME_FILE_NAME = drive.LEAFTHEME_FILE_NAME
 REMOVED_FILE_NAME = drive.REMOVED_FILE_NAME
-EMPTY_LEAFTHEME = {"version": 1, "forward_srs": {}, "reverse_srs": {}}
+EMPTY_LEAFTHEME = store.EMPTY_LEAFTHEME
 
 SCOPES = ['https://www.googleapis.com/auth/drive.metadata.readonly',
           'https://www.googleapis.com/auth/drive.file',
@@ -63,25 +64,107 @@ def index():
     return flask.render_template('index.html', menu_items=get_menu_items())
 
 
-@app.route('/load_dictionary')
-def load_dictionary():
-    if _has_unsaved() and not flask.request.args.get('force'):
-        return flask.render_template('unsaved_warning.html', menu_items=get_menu_items())
+LAST_SYNC_FILE_NAME = 'last_sync.json'
 
+
+@app.route('/sync', methods=['GET', 'POST'])
+def sync_with_drive():
+    """The one place local data and Google Drive are brought in line (see leaftheme/sync.py).
+
+    Only syncs when asked to: a POST (the Sync button), a sync interrupted by a login, or when
+    there is no local copy at all (nothing to lose, and nothing to show without one). A plain
+    visit otherwise just offers the button, so redirects/back/refresh never trigger a sync.
+    ?next=/path — go there afterwards if nothing needs the user's attention."""
+    next_url = _safe_next(flask.request.values.get('next'))
+    retry_url = flask.url_for('sync_with_drive', next=next_url) if next_url else flask.url_for('sync_with_drive')
     if 'credentials' not in flask.session or 'file_name' not in flask.session:
-        return flask.redirect(flask.url_for('authorize'))
+        flask.session['pending_sync'] = True
+        return _login(retry_url)
 
+    has_local_copy = os.path.exists(os.path.join(flask.session['file_name'], DICTIONARY_FILE_NAME))
+    asked = flask.request.method == 'POST' or flask.session.pop('pending_sync', False)
+    if has_local_copy and not asked:
+        return flask.render_template('sync_confirm.html', menu_items=get_menu_items(),
+                                     next_url=next_url, unsynced=_has_unsaved())
     try:
-        d = _drive()
-        _download_to_session(d, d.locate(flask.session.get('dict_file_id')))
-        _keep_credentials(d)
+        result = _run_sync()
     except drive.NeedsLogin:
-        return _login(flask.url_for('load_dictionary', **flask.request.args))
+        flask.session['pending_sync'] = True
+        return _login(retry_url)
     except drive.DriveFailure as e:
         return _drive_error(e)
 
-    _clear_unsaved()
-    return flask.render_template('loaded.html', menu_items=get_menu_items())
+    if next_url and not result.skipped:
+        return flask.redirect(next_url)
+    wt_dict, _ = _load_dictionary()
+    summary = {'wt': result.wt, 'lt': result.lt,
+               'skipped_rows': _skipped_rows(result.skipped, wt_dict)}
+    store.atomic_write(os.path.join(flask.session['file_name'], LAST_SYNC_FILE_NAME),
+                       json.dumps(summary, ensure_ascii=False))
+    return flask.redirect(flask.url_for('sync_result', next=next_url) if next_url
+                          else flask.url_for('sync_result'))
+
+
+@app.route('/sync/result')
+def sync_result():
+    """Shows what the last sync did. Visiting it again never syncs."""
+    session_dir = flask.session.get('file_name')
+    path = os.path.join(session_dir, LAST_SYNC_FILE_NAME) if session_dir else None
+    if not path or not os.path.exists(path):
+        return flask.redirect(flask.url_for('sync_with_drive'))
+    with open(path, encoding='utf-8') as f:
+        summary = json.load(f)
+    wt_dict, _ = _load_dictionary()
+    return flask.render_template('sync_result.html', menu_items=get_menu_items(),
+                                 summary=summary,
+                                 next_url=_safe_next(flask.request.args.get('next')),
+                                 title=wt_dict.title if wt_dict else '',
+                                 theme_count=len(wt_dict.themes) if wt_dict else 0,
+                                 word_count=len(wt_dict.words) if wt_dict else 0)
+
+
+def _skipped_rows(skipped, wt_dict):
+    """Human-readable rows for the changes a sync couldn't apply."""
+    def theme_name(uid):
+        theme = wt_dict.theme_by_uid(uid) if wt_dict else None
+        return theme.name if theme else '(deleted theme)'
+
+    def describe(field, value):
+        if value is None:
+            return '—'
+        if field == 'theme':
+            return theme_name(value)
+        if field == 'word':
+            return f"{value['m']} – {value['t']} ({theme_name(value['theme'])})"
+        return value
+
+    rows = []
+    for s in skipped:
+        field = s.op.get('field')
+        if field == 'unlogged':
+            rows.append({'word': '—', 'word_id': None, 'change': '—', 'drive': '—', 'reason': s.reason})
+            continue
+        current = wt_dict.word_by_uid(s.op['uid']) if wt_dict else None
+        if current is not None:
+            name = current.word
+        else:
+            snap = s.op['from'] if field == 'word' and s.op['from'] else s.op['to']
+            name = snap['m'] if field == 'word' and snap else (s.op['from'] or '?')
+        if field == 'word':
+            change = 'add ' + describe(field, s.op['to']) if s.op['from'] is None else 'delete'
+        else:
+            label = {'m': 'Finnish', 't': 'Russian', 'theme': 'Theme'}.get(field, field)
+            change = f"{label}: {describe(field, s.op['from'])} → {describe(field, s.op['to'])}"
+        rows.append({'word': name, 'word_id': current.id if current is not None else None,
+                     'change': change, 'drive': describe(field, s.drive_value), 'reason': s.reason})
+    return rows
+
+
+@app.route('/load_dictionary')
+@app.route('/save_dictionary')
+def legacy_load_save():
+    """Old Update Dictionary / Save to Drive links: both are a sync now."""
+    return flask.redirect(flask.url_for('sync_with_drive'))
 
 
 @app.route('/themes')
@@ -89,7 +172,7 @@ def get_themes():
     file_name = flask.session.get('file_name', '_none_') + '/' + DICTIONARY_FILE_NAME
 
     if not os.path.exists(file_name):
-        return flask.redirect('load_dictionary')
+        return _missing_dictionary()
 
     with open(file_name, encoding="utf8") as f:
         wt_dict = dictionary.Dictionary(json.load(f))
@@ -102,7 +185,7 @@ def get_words(theme_id):
     file_name = flask.session.get('file_name', '_none_') + '/' + DICTIONARY_FILE_NAME
 
     if not os.path.exists(file_name):
-        return flask.redirect('load_dictionary')
+        return _missing_dictionary()
 
     with open(file_name, encoding="utf8") as f:
         wt_dict = dictionary.Dictionary(json.load(f))
@@ -122,7 +205,7 @@ def add_word():
     file_name = flask.session.get('file_name', '_none_') + '/' + DICTIONARY_FILE_NAME
 
     if not os.path.exists(file_name):
-        return flask.redirect('load_dictionary')
+        return _missing_dictionary()
 
     with open(file_name, encoding="utf8") as f:
         wt_dict = dictionary.Dictionary(json.load(f))
@@ -164,23 +247,11 @@ def add_word():
                                  redirect_to=redirect_to)
 
 
-@app.route('/test_extra/<int:word_id>')
-def test_extra_field(word_id):
-    """Temporary route: add a test extra field to one word to check Android app compatibility."""
-    wt_dict, file_name = _load_dictionary()
-    if wt_dict is None:
-        return flask.redirect('load_dictionary')
-    word = wt_dict.words[word_id]
-    word._extra['_test_prod_tm'] = 250
-    _save_dictionary(wt_dict, file_name)
-    return f"Added _test_prod_tm=250 to word '{word.word}' (id={word_id}). Now Save to Drive and check the app."
-
-
 @app.route('/word/<int:word_id>', methods=['GET', 'POST'])
 def get_word(word_id):
     wt_dict, file_name = _load_dictionary()
     if wt_dict is None:
-        return flask.redirect('load_dictionary')
+        return _missing_dictionary()
 
     word = wt_dict.words.get(word_id)
     if word is None:
@@ -247,7 +318,7 @@ def glosbe_lookup():
 def delete_word(word_id):
     wt_dict, file_name = _load_dictionary()
     if wt_dict is None:
-        return flask.redirect('load_dictionary')
+        return _missing_dictionary()
     word = wt_dict.words.get(word_id)
     if word is None:
         flask.abort(404)
@@ -267,7 +338,7 @@ def delete_word(word_id):
 def search():
     file_name = flask.session.get('file_name', '_none_') + '/' + DICTIONARY_FILE_NAME
     if not os.path.exists(file_name):
-        return flask.redirect('load_dictionary')
+        return _missing_dictionary()
 
     query = ""
     results = []
@@ -288,7 +359,7 @@ def _load_words_json(word_ids_str):
     """Load dictionary and return (words_json_str, error_response_or_None)."""
     file_name = flask.session.get('file_name', '_none_') + '/' + DICTIONARY_FILE_NAME
     if not os.path.exists(file_name):
-        return None, flask.redirect('load_dictionary')
+        return None, _missing_dictionary()
     with open(file_name, encoding="utf8") as f:
         wt_dict = dictionary.Dictionary(json.load(f))
     ids = [int(x) for x in word_ids_str.split(',') if x.strip()]
@@ -371,7 +442,7 @@ def _heaven_themes(wt_dict):
 def review_pick():
     wt_dict, file_name = _load_dictionary()
     if wt_dict is None:
-        return flask.redirect('load_dictionary')
+        return _missing_dictionary()
 
     lt_data = _load_leaftheme()
 
@@ -397,7 +468,7 @@ def review_pick():
 def review_start():
     wt_dict, file_name = _load_dictionary()
     if wt_dict is None:
-        return flask.redirect('load_dictionary')
+        return _missing_dictionary()
 
     theme_id = flask.request.args.get('theme_id', type=int)
     direction = flask.request.args.get('direction', 'forward')
@@ -449,19 +520,15 @@ def review_apply():
         _apply_srs(lt_data, srs_key, uid, quality)
     _save_leaftheme(lt_data)
 
-    # Save both files to Drive and clear the unsaved flag
-    try:
-        if 'credentials' in flask.session:
-            d = _drive()
-            save_dictionary_to_drive(d, flask.session['dict_file_id'], flask.session['file_name'])
-            save_leaftheme_to_drive(d, flask.session.get('leaftheme_file_id'),
-                                    flask.session.get('wt_folder_id'), flask.session['file_name'])
-            _keep_credentials(d)
-            _clear_unsaved()
-    except Exception:
-        pass  # Don't break the review if Drive save fails
-
+    # Sync right away; the ratings are safe locally either way, so a failure is reported, not fatal
     redirect_args = {'direction': direction, 'reviewed': len(results)}
+    try:
+        _run_sync()
+    except drive.NeedsLogin:
+        redirect_args['sync_error'] = 'Google login expired.'
+    except drive.DriveFailure as e:
+        redirect_args['sync_error'] = str(e)
+
     if theme_id is not None:
         redirect_args['theme_id'] = theme_id
     return flask.jsonify(status='ok', reviewed=len(results),
@@ -474,6 +541,7 @@ def review_saved():
     direction = flask.request.args.get('direction', 'forward')
     theme_id = flask.request.args.get('theme_id', type=int)
     reviewed = flask.request.args.get('reviewed', type=int, default=0)
+    sync_error = flask.request.args.get('sync_error')
 
     # Count remaining due words so the button shows the number
     wt_dict, _ = _load_dictionary()
@@ -493,6 +561,7 @@ def review_saved():
     return flask.render_template('review_saved.html',
                                  menu_items=get_menu_items(),
                                  reviewed=reviewed,
+                                 sync_error=sync_error,
                                  remaining=remaining,
                                  direction=direction,
                                  continue_url=flask.url_for('review_start', **continue_args))
@@ -521,43 +590,37 @@ def _drive_error(error):
                                  message=str(error)), 502
 
 
-def _download_to_session(d, location):
-    """Download the .wt and leaftheme.json at location into the session dir.
-
-    Both files are fetched before anything is written, so a failed download leaves
-    the local copy untouched."""
-    dict_bytes = drive.read_wt(d.download(location.wt_id))
-    lt_bytes = d.download(location.lt_id) if location.lt_id else None
-
+def _run_sync():
+    """Sync the session dir with Drive. Raises drive.NeedsLogin / drive.DriveFailure."""
     session_dir = flask.session['file_name']
-    os.makedirs(session_dir, exist_ok=True)
-    with open(os.path.join(session_dir, DICTIONARY_FILE_NAME), 'wb') as f:
-        f.write(dict_bytes)
-    lt_path = os.path.join(session_dir, LEAFTHEME_FILE_NAME)
-    if lt_bytes is not None:
-        with open(lt_path, 'wb') as f:
-            f.write(lt_bytes)
-    else:
-        with open(lt_path, 'w', encoding='utf-8') as f:
-            json.dump(EMPTY_LEAFTHEME, f)
-
-    flask.session['dict_file_id'] = location.wt_id
-    flask.session['wt_folder_id'] = location.folder_id
-    flask.session['leaftheme_file_id'] = location.lt_id
-    _clear_removed()
-
-
-def _fetch_from_drive():
-    """Re-download dict + leaftheme from Drive using IDs already stored in the session.
-    Called automatically on dyno cold-start when temp files are missing."""
+    if not os.path.exists(os.path.join(session_dir, store.STATE_FILE_NAME)):
+        # Sessions from before state.json kept the Drive file id in the cookie
+        os.makedirs(session_dir, exist_ok=True)
+        store.update_state(session_dir, wt_file_id=flask.session.get('dict_file_id'))
     d = _drive()
-    _download_to_session(d, d.locate(flask.session['dict_file_id']))
+    result = sync_engine.sync(d, session_dir)
     _keep_credentials(d)
+    return result
+
+
+def _safe_next(url):
+    """Only allow local paths as a post-sync destination."""
+    if url and url.startswith('/') and not url.startswith('//'):
+        return url
+    return None
+
+
+def _missing_dictionary():
+    """The server has no local copy (new session, or Heroku restarted and wiped it).
+
+    Renders a page whose script restores the browser's copy from the last sync, or runs a sync
+    if the browser has none, then comes back to the current page."""
+    next_url = flask.request.full_path.rstrip('?') if flask.request.method == 'GET' else '/themes'
+    return flask.render_template('restore.html', menu_items=get_menu_items(), next_url=next_url)
 
 
 def _load_dictionary():
-    """Load dictionary from session file. Returns (Dictionary, file_path) or (None, path).
-    Cold-start recovery is handled client-side via localStorage (see base.html JS)."""
+    """Load dictionary from session file. Returns (Dictionary, file_path) or (None, path)."""
     file_name = flask.session.get('file_name', '_none_') + '/' + DICTIONARY_FILE_NAME
     if not os.path.exists(file_name):
         return None, file_name
@@ -582,15 +645,13 @@ def _load_leaftheme():
 
 
 def _save_leaftheme(data):
-    """Write leaftheme.json to session dir and mark unsaved."""
+    """Write leaftheme.json to session dir and flag it for the next sync."""
     session_dir = flask.session.get('file_name')
     if not session_dir:
         return
-    lt_path = os.path.join(session_dir, LEAFTHEME_FILE_NAME)
-    with open(lt_path, 'w', encoding='utf-8') as f:
-        json.dump(data, f, ensure_ascii=False)
-    _mark_unsaved()
-
+    store.atomic_write(os.path.join(session_dir, LEAFTHEME_FILE_NAME),
+                       json.dumps(data, ensure_ascii=False))
+    store.update_state(session_dir, lt_dirty=True)
 
 
 def _srs_due_words(wt_dict, lt_data, srs_key, theme_id=None):
@@ -627,39 +688,17 @@ def _apply_srs(lt_data, srs_key, uid, quality):
     srs[uid] = {'tm': new_ease, 'ca': new_reps, 'di': new_interval, 'dr': new_dr, 'cf': cf, 'log': log}
 
 
-UNSAVED_MARKER = '_UNSAVED_'
-
-
-def _mark_unsaved():
-    session_dir = flask.session.get('file_name')
-    if session_dir:
-        open(os.path.join(session_dir, UNSAVED_MARKER), 'w').close()
-
-
-def _clear_unsaved():
-    """Local copy now matches Drive: drop the unsaved marker and the change log."""
-    session_dir = flask.session.get('file_name')
-    if session_dir:
-        path = os.path.join(session_dir, UNSAVED_MARKER)
-        if os.path.exists(path):
-            os.remove(path)
-        store.clear_ops(session_dir)
-
-
 def _has_unsaved():
     session_dir = flask.session.get('file_name')
-    if session_dir:
-        return os.path.exists(os.path.join(session_dir, UNSAVED_MARKER))
-    return False
+    return bool(session_dir) and os.path.isdir(session_dir) and store.has_local_changes(session_dir)
 
 
 def _save_dictionary(wt_dict, file_name):
-    """Write dictionary back to the session file, append its changes to the log, mark as unsaved."""
+    """Write dictionary back to the session file and append its changes to the log for the next sync."""
     store.atomic_write(file_name, json.dumps(wt_dict.to_dict(), ensure_ascii=False,
                                              separators=(',', ':')))
     store.append_ops(os.path.dirname(file_name), wt_dict.ops)
     wt_dict.ops.clear()
-    _mark_unsaved()
 
 
 def _removed_path():
@@ -667,17 +706,8 @@ def _removed_path():
     return os.path.join(session_dir, REMOVED_FILE_NAME) if session_dir else None
 
 
-def _load_removed():
-    """Return current removed.txt content as bytes (may be empty)."""
-    path = _removed_path()
-    if path and os.path.exists(path):
-        with open(path, 'rb') as f:
-            return f.read()
-    return b''
-
-
 def _append_removed(word):
-    """Append a deleted word's entry to the local removed.txt."""
+    """Append a deleted word's entry to the local removed.txt (sent with the next .wt upload)."""
     from leaftheme.dictionary import _now_iso
     path = _removed_path()
     if not path:
@@ -687,19 +717,11 @@ def _append_removed(word):
         f.write(line)
 
 
-def _clear_removed():
-    """Reset removed.txt to empty (after a successful Drive upload or fresh download)."""
-    path = _removed_path()
-    if path:
-        with open(path, 'w') as f:
-            pass
-
-
 @app.route('/stats')
 def stats():
     wt_dict, file_name = _load_dictionary()
     if wt_dict is None:
-        return flask.redirect('load_dictionary')
+        return _missing_dictionary()
 
     from datetime import datetime, timezone
     from collections import Counter
@@ -889,7 +911,7 @@ def _word_popup_html(token):
 def reading():
     wt_dict, file_name = _load_dictionary()
     if wt_dict is None:
-        return flask.redirect('load_dictionary')
+        return _missing_dictionary()
 
     import read as _read
 
@@ -912,99 +934,71 @@ def reading():
                                  tokens=tokens)
 
 
-@app.route('/api/dict_status')
-def api_dict_status():
-    """Lightweight check: does the server currently have the dictionary in its temp files?"""
-    if 'file_name' not in flask.session:
-        return flask.jsonify({'loaded': False})
-    path = flask.session['file_name'] + '/' + DICTIONARY_FILE_NAME
-    loaded = os.path.exists(path)
-    mtime = int(os.path.getmtime(path) * 1000) if loaded else None
-    return flask.jsonify({'loaded': loaded, 'mtime': mtime})
+def _sync_rev(session_dir):
+    """Identifies the last synced Drive state; changes only when a sync moves something."""
+    state = store.load_state(session_dir)
+    if not state['wt_base']:
+        return None
+    return f"{state['wt_base']}|{state['lt_base']}"
 
 
-@app.route('/api/dict_json')
-def api_dict_json():
-    """Return current dictionary + leaftheme JSON so the browser can cache them."""
-    if 'file_name' not in flask.session:
-        return flask.jsonify({'error': 'no session'}), 401
-    dict_path = flask.session['file_name'] + '/' + DICTIONARY_FILE_NAME
-    if not os.path.exists(dict_path):
+@app.context_processor
+def _inject_sync_rev():
+    session_dir = flask.session.get('file_name')
+    rev = None
+    if session_dir and os.path.exists(os.path.join(session_dir, DICTIONARY_FILE_NAME)):
+        rev = _sync_rev(session_dir)
+    return {'sync_rev': rev}
+
+
+@app.route('/api/snapshot')
+def api_snapshot():
+    """The session's files as of the last sync, for the browser's backup copy.
+
+    Refused while there are local changes: the browser copy must always be a synced state,
+    so restoring it can never push stale data (the next sync just pulls what's newer)."""
+    session_dir = flask.session.get('file_name')
+    if not session_dir or not os.path.exists(os.path.join(session_dir, DICTIONARY_FILE_NAME)):
         return flask.jsonify({'error': 'not loaded'}), 404
-    with open(dict_path, encoding='utf-8') as f:
+    if store.has_local_changes(session_dir):
+        return flask.jsonify({'error': 'local changes not synced'}), 409
+    with open(os.path.join(session_dir, DICTIONARY_FILE_NAME), encoding='utf-8') as f:
         dict_content = f.read()
-    lt_path = flask.session['file_name'] + '/' + LEAFTHEME_FILE_NAME
+    lt_path = os.path.join(session_dir, LEAFTHEME_FILE_NAME)
+    lt_content = json.dumps(EMPTY_LEAFTHEME)
     if os.path.exists(lt_path):
         with open(lt_path, encoding='utf-8') as f:
             lt_content = f.read()
-    else:
-        lt_content = json.dumps(EMPTY_LEAFTHEME)
-    return flask.jsonify({'dict': dict_content, 'leaftheme': lt_content,
-                          'unsaved': _has_unsaved()})
+    return flask.jsonify({'rev': _sync_rev(session_dir), 'dict': dict_content,
+                          'leaftheme': lt_content, 'state': store.load_state(session_dir)})
 
 
-@app.route('/api/restore_cache', methods=['POST'])
-def api_restore_cache():
-    """Write browser-cached dictionary + leaftheme back to server temp files after a cold start."""
-    if 'file_name' not in flask.session:
+@app.route('/api/restore', methods=['POST'])
+def api_restore():
+    """Put the browser's backup copy back after the server lost its files (Heroku restart)."""
+    session_dir = flask.session.get('file_name')
+    if not session_dir:
         return flask.jsonify({'error': 'no session'}), 401
-    data = flask.request.get_json()
-    if not data or 'dict' not in data:
-        return flask.jsonify({'error': 'no data'}), 400
-    session_dir = flask.session['file_name']
+    if os.path.exists(os.path.join(session_dir, DICTIONARY_FILE_NAME)):
+        return flask.jsonify({'ok': True, 'skipped': 'server copy exists'})
+    data = flask.request.get_json(silent=True) or {}
+    try:
+        dict_data = json.loads(data['dict'])
+        lt_data = json.loads(data.get('leaftheme') or json.dumps(EMPTY_LEAFTHEME))
+        state = dict(data['state'])
+        dictionary.Dictionary(dict_data)  # must at least parse
+    except (KeyError, TypeError, ValueError):
+        return flask.jsonify({'error': 'bad backup'}), 400
+    state = {k: state.get(k, v) for k, v in store.DEFAULT_STATE.items()}
+    state.update(wt_dirty=False, lt_dirty=False)
     os.makedirs(session_dir, exist_ok=True)
-    with open(session_dir + '/' + DICTIONARY_FILE_NAME, 'w', encoding='utf-8') as f:
-        f.write(data['dict'])
-    with open(session_dir + '/' + LEAFTHEME_FILE_NAME, 'w', encoding='utf-8') as f:
-        f.write(data.get('leaftheme', json.dumps(EMPTY_LEAFTHEME)))
-    if data.get('unsaved'):
-        _mark_unsaved()
+    store.atomic_write(os.path.join(session_dir, DICTIONARY_FILE_NAME),
+                       json.dumps(dict_data, ensure_ascii=False, separators=(',', ':')))
+    store.atomic_write(os.path.join(session_dir, LEAFTHEME_FILE_NAME),
+                       json.dumps(lt_data, ensure_ascii=False))
+    store.save_state(session_dir, state)
+    store.clear_ops(session_dir)
     return flask.jsonify({'ok': True})
-
-
-@app.route('/api/fetch_from_drive', methods=['POST'])
-def api_fetch_from_drive():
-    """Fallback: re-download from Drive when browser has no cached data (new browser/incognito)."""
-    if 'credentials' not in flask.session or 'dict_file_id' not in flask.session:
-        return flask.jsonify({'error': 'no credentials'}), 401
-    try:
-        _fetch_from_drive()
-        return flask.jsonify({'ok': True})
-    except drive.NeedsLogin:
-        return flask.jsonify({'error': 'auth_expired'}), 401
-    except drive.DriveFailure as e:
-        return flask.jsonify({'error': str(e)}), 500
-
-
-@app.route('/save_dictionary')
-def save_dictionary():
-    if 'credentials' not in flask.session:
-        return _login(flask.url_for('save_dictionary'))
-    if 'dict_file_id' not in flask.session:
-        return flask.redirect(flask.url_for('load_dictionary'))
-
-    wt_dict, _ = _load_dictionary()
-    if wt_dict is None:
-        return flask.redirect(flask.url_for('load_dictionary'))
-
-    try:
-        d = _drive()
-        save_dictionary_to_drive(d, flask.session['dict_file_id'], flask.session['file_name'])
-        save_leaftheme_to_drive(d, flask.session.get('leaftheme_file_id'),
-                                flask.session.get('wt_folder_id'), flask.session['file_name'])
-        _keep_credentials(d)
-    except drive.NeedsLogin:
-        return _login(flask.url_for('save_dictionary'))
-    except drive.DriveFailure as e:
-        return _drive_error(e)
-
-    _clear_unsaved()
-    _clear_removed()
-    word_count = sum(t.word_count() for t in wt_dict.themes.values())
-    theme_count = len(wt_dict.themes)
-    return flask.render_template('saved.html', menu_items=get_menu_items(),
-                                 word_count=word_count, theme_count=theme_count,
-                                 title=wt_dict.title)
 
 
 @app.route('/authorize')
@@ -1052,7 +1046,7 @@ def oauth2callback():
     flask.session.permanent = True
 
     next_url = flask.session.pop('oauth_next', None)
-    return flask.redirect(next_url or flask.url_for('load_dictionary'))
+    return flask.redirect(next_url or flask.url_for('sync_with_drive'))
 
 
 @app.route('/clear')
@@ -1084,57 +1078,11 @@ def _client_config():
     }
 
 
-def save_dictionary_to_drive(d, file_id, session_dir):
-    """Zip dictionary.txt (+ removed.txt) from session_dir and upload it to Drive, overwriting file_id."""
-    dict_path = os.path.join(session_dir, DICTIONARY_FILE_NAME)
-    if not os.path.exists(dict_path):
-        raise FileNotFoundError(f"No {DICTIONARY_FILE_NAME} in {session_dir}")
-
-    # Re-serialize JSON with compact separators (no spaces) to match app format
-    with open(dict_path, encoding='utf-8') as f:
-        dict_data = json.load(f)
-    dict_bytes = json.dumps(dict_data, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
-
-    # removed.txt — carries pending deletions so the Android app removes them on next sync
-    removed_path = os.path.join(session_dir, REMOVED_FILE_NAME)
-    removed_bytes = b''
-    if os.path.exists(removed_path):
-        with open(removed_path, 'rb') as f:
-            removed_bytes = f.read()
-
-    wt_bytes = drive.build_wt(dict_bytes, removed_bytes)
-
-    # Save .wt locally for sideloading/debugging
-    with open(os.path.join(session_dir, 'dictionary.wt'), 'wb') as f:
-        f.write(wt_bytes)
-
-    d.update(file_id, wt_bytes, 'application/zip')
-
-
-def save_leaftheme_to_drive(d, file_id, folder_id, session_dir):
-    """Upload leaftheme.json to Drive (create if new, update if exists)."""
-    lt_path = os.path.join(session_dir, LEAFTHEME_FILE_NAME)
-    if not os.path.exists(lt_path):
-        return
-
-    with open(lt_path, 'rb') as f:
-        lt_bytes = f.read()
-
-    if file_id:
-        d.update(file_id, lt_bytes, 'application/json')
-    elif folder_id:
-        flask.session['leaftheme_file_id'] = d.create(folder_id, LEAFTHEME_FILE_NAME, lt_bytes,
-                                                      'application/json')
-
-
 def get_menu_items():
     file_name = flask.session.get('file_name', '_none_') + '/' + DICTIONARY_FILE_NAME
     out = []
     if 'file_name' in flask.session and os.path.exists(file_name):
-        out.append(("Update Dictionary", "/load_dictionary"))
-        unsaved = _has_unsaved()
-        save_label = "Save to Drive *" if unsaved else "Save to Drive"
-        out.append((save_label, "/save_dictionary"))
+        out.append(("Sync with Drive *" if _has_unsaved() else "Sync with Drive", "/sync"))
         out.append(('Themes', "/themes"))
         out.append(('Search', "/search"))
         out.append(('Add Word', "/add_word"))
@@ -1142,6 +1090,6 @@ def get_menu_items():
         out.append(('Stats', "/stats"))
         out.append(('Reading', "/reading"))
     else:
-        out.append(("Load Dictionary", "/load_dictionary"))
+        out.append(("Load Dictionary", "/sync"))
     out.append(("Logout", "/clear"))
     return out

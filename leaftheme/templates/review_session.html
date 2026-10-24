@@ -139,6 +139,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     function submitResults() {
+        document.getElementById('sync-overlay').classList.remove('d-none');
         fetch('/review/apply', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},

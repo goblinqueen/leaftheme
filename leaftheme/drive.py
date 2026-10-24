@@ -163,17 +163,18 @@ class Drive:
             return buf.getvalue()
 
     def update(self, file_id, data, mimetype):
+        """Replace a file's content. Returns the new metadata (id, md5Checksum)."""
         with _Errors():
             media = googleapiclient.http.MediaIoBaseUpload(io.BytesIO(data), mimetype=mimetype)
-            self._files.update(fileId=file_id, media_body=media).execute()
+            return self._files.update(fileId=file_id, media_body=media,
+                                      fields='id, md5Checksum').execute()
 
     def create(self, folder_id, name, data, mimetype):
-        """Create a new file in folder_id and return its id."""
+        """Create a new file in folder_id. Returns its metadata (id, md5Checksum)."""
         with _Errors():
             media = googleapiclient.http.MediaIoBaseUpload(io.BytesIO(data), mimetype=mimetype)
-            result = self._files.create(body={'name': name, 'parents': [folder_id]},
-                                        media_body=media).execute()
-            return result['id']
+            return self._files.create(body={'name': name, 'parents': [folder_id]},
+                                      media_body=media, fields='id, md5Checksum').execute()
 
 
 def read_wt(data):

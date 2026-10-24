@@ -1,0 +1,39 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<div class="mt-5 text-center">
+    <div class="spinner-border mb-3" role="status"></div>
+    <p id="restore-status">Getting your dictionary ready…</p>
+    <noscript><a href="/sync?next={{ next_url | urlencode }}">Continue</a></noscript>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+    // The server has no copy of the dictionary (new session, or Heroku restarted).
+    // Put back this browser's copy from the last sync if there is one, otherwise sync with Drive.
+    var sid = {{ session.get('file_name') | tojson }};
+    var next = {{ next_url | tojson }};
+    var syncUrl = '/sync?next=' + encodeURIComponent(next);
+    var backup = null;
+    try {
+        backup = sid && JSON.parse(localStorage.getItem('wt_backup_' + sid) || 'null');
+    } catch (e) {}
+    if (!backup) {
+        window.location.replace(syncUrl);
+        return;
+    }
+    document.getElementById('restore-status').textContent = 'Restoring your dictionary…';
+    fetch('/api/restore', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(backup)
+    }).then(function (r) { return r.json(); }).then(function (d) {
+        window.location.replace(d.ok ? next : syncUrl);
+    }).catch(function () {
+        window.location.replace(syncUrl);
+    });
+})();
+</script>
+{% endblock %}
