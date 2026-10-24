@@ -180,9 +180,6 @@ def get_themes():
                                  themes=wt_dict.themes.values())
 
 
-TEST_SAMPLE_SIZE = 20  # words per flashcard test started from a theme page
-
-
 @app.route('/words/<theme_id>')
 def get_words(theme_id):
     file_name = flask.session.get('file_name', '_none_') + '/' + DICTIONARY_FILE_NAME
@@ -193,14 +190,14 @@ def get_words(theme_id):
     with open(file_name, encoding="utf8") as f:
         wt_dict = dictionary.Dictionary(json.load(f))
 
-    theme = wt_dict.themes.get(int(theme_id))
-    if theme is None:
-        flask.abort(404)
-    words = list(theme.words.values())
-    sample = random.sample(words, min(TEST_SAMPLE_SIZE, len(words)))
-    return flask.render_template('words.html', menu_items=get_menu_items(), theme=theme,
-                                 word_count=len(words),
-                                 test_ids=','.join(str(w.id) for w in sample))
+    theme = wt_dict.themes[int(theme_id)]
+    out = []
+    for i, word in enumerate(sorted(theme.words.values())):
+        if i > 30:
+            break
+        out.append(word)
+    return flask.render_template('words.html',
+                                 menu_items=get_menu_items(), words=out, theme=theme)
 
 
 @app.route('/add_word', methods=['GET', 'POST'])
