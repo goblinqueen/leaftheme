@@ -64,18 +64,32 @@ def index():
     return flask.render_template('index.html', menu_items=get_menu_items())
 
 
-@app.route('/sync')
+LAST_SYNC_FILE_NAME = 'last_sync.json'
+
+
+@app.route('/sync', methods=['GET', 'POST'])
 def sync_with_drive():
     """The one place local data and Google Drive are brought in line (see leaftheme/sync.py).
 
+    Only syncs when asked to: a POST (the Sync button), a sync interrupted by a login, or when
+    there is no local copy at all (nothing to lose, and nothing to show without one). A plain
+    visit otherwise just offers the button, so redirects/back/refresh never trigger a sync.
     ?next=/path — go there afterwards if nothing needs the user's attention."""
-    next_url = _safe_next(flask.request.args.get('next'))
+    next_url = _safe_next(flask.request.values.get('next'))
     retry_url = flask.url_for('sync_with_drive', next=next_url) if next_url else flask.url_for('sync_with_drive')
     if 'credentials' not in flask.session or 'file_name' not in flask.session:
+        flask.session['pending_sync'] = True
         return _login(retry_url)
+
+    has_local_copy = os.path.exists(os.path.join(flask.session['file_name'], DICTIONARY_FILE_NAME))
+    asked = flask.request.method == 'POST' or flask.session.pop('pending_sync', False)
+    if has_local_copy and not asked:
+        return flask.render_template('sync_confirm.html', menu_items=get_menu_items(),
+                                     next_url=next_url, unsynced=_has_unsaved())
     try:
         result = _run_sync()
     except drive.NeedsLogin:
+        flask.session['pending_sync'] = True
         return _login(retry_url)
     except drive.DriveFailure as e:
         return _drive_error(e)
@@ -83,9 +97,27 @@ def sync_with_drive():
     if next_url and not result.skipped:
         return flask.redirect(next_url)
     wt_dict, _ = _load_dictionary()
+    summary = {'wt': result.wt, 'lt': result.lt,
+               'skipped_rows': _skipped_rows(result.skipped, wt_dict)}
+    store.atomic_write(os.path.join(flask.session['file_name'], LAST_SYNC_FILE_NAME),
+                       json.dumps(summary, ensure_ascii=False))
+    return flask.redirect(flask.url_for('sync_result', next=next_url) if next_url
+                          else flask.url_for('sync_result'))
+
+
+@app.route('/sync/result')
+def sync_result():
+    """Shows what the last sync did. Visiting it again never syncs."""
+    session_dir = flask.session.get('file_name')
+    path = os.path.join(session_dir, LAST_SYNC_FILE_NAME) if session_dir else None
+    if not path or not os.path.exists(path):
+        return flask.redirect(flask.url_for('sync_with_drive'))
+    with open(path, encoding='utf-8') as f:
+        summary = json.load(f)
+    wt_dict, _ = _load_dictionary()
     return flask.render_template('sync_result.html', menu_items=get_menu_items(),
-                                 result=result, next_url=next_url,
-                                 skipped_rows=_skipped_rows(result.skipped, wt_dict),
+                                 summary=summary,
+                                 next_url=_safe_next(flask.request.args.get('next')),
                                  title=wt_dict.title if wt_dict else '',
                                  theme_count=len(wt_dict.themes) if wt_dict else 0,
                                  word_count=len(wt_dict.words) if wt_dict else 0)

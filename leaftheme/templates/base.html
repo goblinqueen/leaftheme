@@ -76,13 +76,23 @@
                 <div>Syncing with Google Drive…</div>
             </div>
         </div>
+        <form id="sync-form" method="post" action="/sync" class="d-none"></form>
         <script>
-        // "Syncing…" overlay for any link to /sync (the request can take a few seconds)
+        // Sync links POST to /sync (a plain GET only offers a button, so redirects, back and
+        // refresh never sync by themselves), with a "Syncing…" overlay while it runs.
+        function showSyncOverlay() {
+            document.getElementById('sync-overlay').classList.remove('d-none');
+        }
         document.addEventListener('click', function (e) {
             var link = e.target.closest('a.js-sync');
             if (link && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
-                document.getElementById('sync-overlay').classList.remove('d-none');
+                e.preventDefault();
+                showSyncOverlay();
+                document.getElementById('sync-form').submit();
             }
+        });
+        document.addEventListener('submit', function (e) {
+            if (e.target.classList.contains('js-sync-form')) showSyncOverlay();
         });
         window.addEventListener('pageshow', function () {
             document.getElementById('sync-overlay').classList.add('d-none');
