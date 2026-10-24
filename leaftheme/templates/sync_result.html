@@ -1,0 +1,44 @@
+{% extends 'base.html' %}
+
+{% set labels = {'unchanged': 'already up to date', 'pulled': 'updated from Drive',
+                 'pushed': 'saved to Drive', 'merged': 'merged with changes on Drive and saved'} %}
+
+{% block content %}
+<h2 class="mt-4">Synced with Drive</h2>
+<p class="text-muted mb-1">{{ title }}: {{ theme_count }} themes, {{ word_count }} words</p>
+<ul class="text-muted">
+    <li>Dictionary: {{ labels[result.wt] }}</li>
+    <li>Review progress: {{ labels[result.lt] }}</li>
+</ul>
+
+{% if result.skipped %}
+<div class="alert alert-warning mt-3">
+    {{ result.skipped | length }} of your change{{ 's' if result.skipped | length != 1 }}
+    couldn't be applied because the same thing was changed on Drive (usually on the phone).
+    Drive's version was kept — redo them by hand if you still want them.
+</div>
+<div class="table-responsive">
+<table class="table table-sm align-middle">
+    <thead>
+    <tr><th>Word</th><th>Your change</th><th>On Drive now</th><th>Why</th></tr>
+    </thead>
+    <tbody>
+    {% for row in skipped_rows %}
+    <tr>
+        <td>{% if row.word_id is not none %}<a href="/word/{{ row.word_id }}">{{ row.word }}</a>{% else %}{{ row.word }}{% endif %}</td>
+        <td>{{ row.change }}</td>
+        <td>{{ row.drive }}</td>
+        <td class="text-muted small">{{ row.reason }}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+</table>
+</div>
+{% endif %}
+
+{% if next_url %}
+<a href="{{ next_url }}" class="btn btn-primary mt-2">Continue</a>
+{% else %}
+<a href="/themes" class="btn btn-primary mt-2">View themes</a>
+{% endif %}
+{% endblock %}

@@ -22,7 +22,7 @@
                 <div class="sidebar-heading border-bottom bg-light">LeafTheme</div>
                 <div class="list-group list-group-flush">
                     {% for menu_item in menu_items %}
-                    <a class="list-group-item list-group-item-action list-group-item-light p-3" href="{{ menu_item[1] }}">{{ menu_item[0] }}</a>
+                    <a class="list-group-item list-group-item-action list-group-item-light p-3{% if menu_item[1] == '/sync' %} js-sync{% endif %}" href="{{ menu_item[1] }}">{{ menu_item[0] }}</a>
                     {% endfor %}
                 </div>
             </div>
@@ -45,10 +45,10 @@
                                     </a>
                                     <div class="dropdown-menu dropdown-menu-end" aria-labelledby="navbarDropdown">
                                         {% if session.file_name %}
-                                            <a class="dropdown-item" href="/load_dictionary">Update Dictionary</a>
+                                            <a class="dropdown-item js-sync" href="/sync">Sync with Drive</a>
                                             <a class="dropdown-item" href="/clear">Logout</a>
                                         {% else %}
-                                            <a class="dropdown-item" href="/load_dictionary">Load dictionary</a>
+                                            <a class="dropdown-item js-sync" href="/sync">Load dictionary</a>
                                         {% endif %}
                                         <div class="dropdown-divider"></div>
                                         <a class="dropdown-item" href="/">Home</a>
@@ -69,46 +69,48 @@
         <!-- Core theme JS-->
         <script src="{{ url_for('static', filename='js/scripts.js')}}"></script>
         {% block scripts %}{% endblock %}
+        <div id="sync-overlay" class="d-none position-fixed top-0 start-0 w-100 h-100 d-flex align-items-center justify-content-center"
+             style="background: rgba(0,0,0,.55); z-index: 2000;">
+            <div class="card p-4 text-center">
+                <div class="spinner-border mx-auto mb-3" role="status"></div>
+                <div>Syncing with Google Drive…</div>
+            </div>
+        </div>
         <script>
-        (function () {
-            var sid = {{ session.get('file_name') | tojson }};
-            if (!sid) return;
-            var DK = 'wt_d_' + sid, LK = 'wt_l_' + sid,
-                UK = 'wt_u_' + sid, MK = 'wt_m_' + sid;
+        // "Syncing…" overlay for any link to /sync (the request can take a few seconds)
+        document.addEventListener('click', function (e) {
+            var link = e.target.closest('a.js-sync');
+            if (link && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
+                document.getElementById('sync-overlay').classList.remove('d-none');
+            }
+        });
+        window.addEventListener('pageshow', function () {
+            document.getElementById('sync-overlay').classList.add('d-none');
+        });
 
-            fetch('/api/dict_status').then(function (r) { return r.json(); }).then(function (s) {
-                if (s.loaded) {
-                    // Server has the dict — update localStorage only if file changed
-                    if (String(s.mtime) !== localStorage.getItem(MK)) {
-                        fetch('/api/dict_json').then(function (r) { return r.json(); }).then(function (d) {
-                            localStorage.setItem(DK, d.dict);
-                            localStorage.setItem(LK, d.leaftheme);
-                            localStorage.setItem(UK, d.unsaved ? '1' : '');
-                            localStorage.setItem(MK, String(s.mtime));
-                        }).catch(function () {});
-                    }
-                } else {
-                    // Cold start — try localStorage first
-                    var dict = localStorage.getItem(DK);
-                    if (dict) {
-                        fetch('/api/restore_cache', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({
-                                dict: dict,
-                                leaftheme: localStorage.getItem(LK) || '{}',
-                                unsaved: !!localStorage.getItem(UK)
-                            })
-                        }).then(function (r) { return r.json(); }).then(function (d) {
-                            if (d.ok) window.location = '/themes';
-                        }).catch(function () {});
-                    } else {
-                        // No localStorage data — fall back to Drive (new browser / incognito)
-                        fetch('/api/fetch_from_drive', { method: 'POST' })
-                            .then(function (r) { return r.json(); }).then(function (d) {
-                                if (d.ok) window.location = '/themes';
-                            }).catch(function () {});
-                    }
+        // Browser backup of the last synced state, used to restore the server's copy after a
+        // Heroku restart (see restore.html). Only ever written right after a sync.
+        (function () {
+            try {
+                // Drop the old-format cache (it could hold unsynced or stale copies)
+                Object.keys(localStorage).forEach(function (k) {
+                    if (/^wt_[dlum]_/.test(k)) localStorage.removeItem(k);
+                });
+            } catch (e) {}
+            var sid = {{ session.get('file_name') | tojson }};
+            var rev = {{ sync_rev | tojson }};
+            if (!sid || !rev) return;
+            var key = 'wt_backup_' + sid;
+            try {
+                var stored = JSON.parse(localStorage.getItem(key) || 'null');
+                if (stored && stored.rev === rev) return;
+            } catch (e) {}
+            fetch('/api/snapshot').then(function (r) { return r.ok ? r.json() : null; }).then(function (snap) {
+                if (!snap || snap.rev !== rev) return;
+                try {
+                    localStorage.setItem(key, JSON.stringify(snap));
+                } catch (e) {
+                    console.warn('LeafTheme: could not store the backup copy in this browser', e);
                 }
             }).catch(function () {});
         })();

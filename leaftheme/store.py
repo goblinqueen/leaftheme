@@ -5,12 +5,25 @@
 * The change log (ops.json): every local change to the dictionary since the last time the
   session matched Drive, as {uid, field, from, to, at} records. See leaftheme/sync.py for how
   the log is replayed on top of a fresh copy from Drive.
+* The sync state (state.json): Drive file ids, the Drive version (md5Checksum) each local file
+  was last synced with ("base"), and whether each file has local changes not yet on Drive.
 """
 import json
 import os
 import tempfile
 
 OPS_FILE_NAME = 'ops.json'
+STATE_FILE_NAME = 'state.json'
+EMPTY_LEAFTHEME = {"version": 1, "forward_srs": {}, "reverse_srs": {}}
+DEFAULT_STATE = {
+    'wt_file_id': None,     # the .wt on Drive
+    'lt_file_id': None,     # leaftheme.json on Drive (None until first created)
+    'folder_id': None,      # the WordTheme folder both live in
+    'wt_base': None,        # md5Checksum of the .wt the local dictionary was last synced with
+    'lt_base': None,        # md5Checksum of leaftheme.json last synced with
+    'wt_dirty': False,      # local dictionary has changes not on Drive
+    'lt_dirty': False,      # local leaftheme.json has changes not on Drive
+}
 
 
 def atomic_write(path, data):
@@ -48,3 +61,29 @@ def clear_ops(session_dir):
     path = os.path.join(session_dir, OPS_FILE_NAME)
     if os.path.exists(path):
         os.remove(path)
+
+
+def load_state(session_dir):
+    state = dict(DEFAULT_STATE)
+    path = os.path.join(session_dir, STATE_FILE_NAME)
+    if os.path.exists(path):
+        with open(path, encoding='utf-8') as f:
+            state.update(json.load(f))
+    return state
+
+
+def save_state(session_dir, state):
+    atomic_write(os.path.join(session_dir, STATE_FILE_NAME), json.dumps(state))
+
+
+def update_state(session_dir, **changes):
+    state = load_state(session_dir)
+    state.update(changes)
+    save_state(session_dir, state)
+    return state
+
+
+def has_local_changes(session_dir):
+    """True if anything in the session hasn't reached Drive yet."""
+    state = load_state(session_dir)
+    return state['wt_dirty'] or state['lt_dirty'] or bool(load_ops(session_dir))
