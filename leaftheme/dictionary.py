@@ -22,6 +22,11 @@ def _parse_iso(s):
     return datetime.fromisoformat(s)
 
 
+def spelling_key(word_str):
+    """Normalized Finnish spelling for uniqueness checks (str.strip also drops non-breaking spaces)."""
+    return word_str.strip().lower()
+
+
 class Dictionary:
 
     class Theme:
@@ -173,6 +178,33 @@ class Dictionary:
             self.words[x['w']].set_theme(x['t'])
             self.themes[x['t']].add_word(self.words[x['w']])
 
+        # Change log of mutations made through this object, as {uid, field, from, to, at}
+        # records (see leaftheme/sync.py). field is 'm', 't', 'theme' (theme uid) or
+        # 'word' for add (from None) / delete (to None) with a {m, t, theme} snapshot.
+        self.ops = []
+
+    def word_by_uid(self, uid):
+        return next((w for w in self.words.values() if w.uid == uid), None)
+
+    def theme_by_uid(self, uid):
+        return next((t for t in self.themes.values() if t.uid == uid), None)
+
+    def find_spelling(self, word_str, exclude_uid=None):
+        """Return a word with the same normalized spelling (other than exclude_uid), or None."""
+        key = spelling_key(word_str)
+        return next((w for w in self.words.values()
+                     if w.uid != exclude_uid and spelling_key(w.word) == key), None)
+
+    def snapshot(self, word):
+        """Comparable {m, t, theme uid} view of a word (None for a missing word)."""
+        if word is None:
+            return None
+        theme = self.themes.get(word.theme)
+        return {'m': word.word, 't': word.translation, 'theme': theme.uid if theme else None}
+
+    def _record(self, uid, field, old, new):
+        self.ops.append({'uid': uid, 'field': field, 'from': old, 'to': new, 'at': _now_iso()})
+
     def _touch(self, word=None):
         """Bump modified dates so the Android app sees the change as newer than its own copy."""
         now = _now_iso()
@@ -194,18 +226,18 @@ class Dictionary:
         self.themes[theme.id] = theme
         return theme
 
-    def add_word(self, theme_id, word_str, translation):
+    def add_word(self, theme_id, word_str, translation, uid=None):
         if theme_id not in self.themes:
             raise KeyError(f"Theme {theme_id} not found")
-        word = self.Word({
-            'id': self._next_word_id(),
-            'm': word_str,
-            't': translation,
-        })
+        value = {'id': self._next_word_id(), 'm': word_str, 't': translation}
+        if uid:
+            value['uid'] = uid
+        word = self.Word(value)
         word.set_theme(theme_id)
         self.words[word.id] = word
         self.themes[theme_id].add_word(word)
         self._touch(word)
+        self._record(word.uid, 'word', None, self.snapshot(word))
         return word
 
     def edit_word(self, word_id, word_str=None, translation=None):
@@ -213,6 +245,7 @@ class Dictionary:
         word = self.words[word_id]
         changed = False
         if word_str and word_str != word.word:
+            self._record(word.uid, 'm', word.word, word_str)
             theme = self.themes.get(word.theme)
             if theme is not None and theme.words.get(str(word)) is word:
                 del theme.words[str(word)]
@@ -221,6 +254,7 @@ class Dictionary:
                 theme.add_word(word)
             changed = True
         if translation and translation != word.translation:
+            self._record(word.uid, 't', word.translation, translation)
             word.translation = translation
             changed = True
         if changed:
@@ -232,9 +266,11 @@ class Dictionary:
         if new_theme_id not in self.themes:
             raise KeyError(f"Theme {new_theme_id} not found")
         word = self.words[word_id]
+        old_theme = self.themes.get(word.theme)
+        self._record(word.uid, 'theme', old_theme.uid if old_theme else None,
+                     self.themes[new_theme_id].uid)
         # Remove from old theme
-        if word.theme is not None and word.theme in self.themes:
-            old_theme = self.themes[word.theme]
+        if old_theme is not None:
             key = str(word)
             if key in old_theme.words:
                 del old_theme.words[key]
@@ -248,7 +284,9 @@ class Dictionary:
         """Remove a word from the dictionary and its theme."""
         if word_id not in self.words:
             raise KeyError(f"Word {word_id} not found")
-        word = self.words.pop(word_id)
+        word = self.words[word_id]
+        self._record(word.uid, 'word', self.snapshot(word), None)
+        del self.words[word_id]
         if word.theme is not None and word.theme in self.themes:
             self.themes[word.theme].words.pop(str(word), None)
         self._touch()
