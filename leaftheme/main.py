@@ -193,10 +193,7 @@ def get_word(word_id):
         new_translation = flask.request.form.get('translation', '').strip()
         new_theme_id = flask.request.form.get('theme_id', type=int)
         redirect_to = flask.request.form.get('redirect_to', '').strip()
-        if new_word:
-            word.word = new_word
-        if new_translation:
-            word.translation = new_translation
+        wt_dict.edit_word(word_id, new_word, new_translation)
         if new_theme_id is not None and new_theme_id != word.theme:
             wt_dict.move_word(word_id, new_theme_id)
         _save_dictionary(wt_dict, file_name)

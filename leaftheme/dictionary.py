@@ -173,6 +173,13 @@ class Dictionary:
             self.words[x['w']].set_theme(x['t'])
             self.themes[x['t']].add_word(self.words[x['w']])
 
+    def _touch(self, word=None):
+        """Bump modified dates so the Android app sees the change as newer than its own copy."""
+        now = _now_iso()
+        if word is not None:
+            word.modified_date = now
+        self.modified_date = now
+
     def _next_theme_id(self):
         return max(self.themes.keys(), default=0) + 1
 
@@ -198,7 +205,27 @@ class Dictionary:
         word.set_theme(theme_id)
         self.words[word.id] = word
         self.themes[theme_id].add_word(word)
+        self._touch(word)
         return word
+
+    def edit_word(self, word_id, word_str=None, translation=None):
+        """Change a word's spelling and/or translation. Returns True if anything changed."""
+        word = self.words[word_id]
+        changed = False
+        if word_str and word_str != word.word:
+            theme = self.themes.get(word.theme)
+            if theme is not None and theme.words.get(str(word)) is word:
+                del theme.words[str(word)]
+            word.word = word_str
+            if theme is not None:
+                theme.add_word(word)
+            changed = True
+        if translation and translation != word.translation:
+            word.translation = translation
+            changed = True
+        if changed:
+            self._touch(word)
+        return changed
 
     def move_word(self, word_id, new_theme_id):
         """Move a word from its current theme to a different theme."""
@@ -214,6 +241,7 @@ class Dictionary:
         # Add to new theme
         word.set_theme(new_theme_id)
         self.themes[new_theme_id].add_word(word)
+        self._touch(word)
         return word
 
     def remove_word(self, word_id):
@@ -223,6 +251,7 @@ class Dictionary:
         word = self.words.pop(word_id)
         if word.theme is not None and word.theme in self.themes:
             self.themes[word.theme].words.pop(str(word), None)
+        self._touch()
         return word
 
     def ensure_theme(self, name):
