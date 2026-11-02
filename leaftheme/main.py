@@ -610,10 +610,10 @@ def _safe_next(url):
 def _missing_dictionary():
     """The server has no local copy (new session, or Heroku restarted and wiped it).
 
-    Renders a page whose script restores the browser's copy from the last sync, or runs a sync
-    if the browser has none, then comes back to the current page."""
+    Renders a holding page: base.html's script restores the browser's copy from the last sync,
+    or runs a sync if the browser has none, then comes back to the current page."""
     next_url = flask.request.full_path.rstrip('?') if flask.request.method == 'GET' else '/themes'
-    return flask.render_template('restore.html', menu_items=get_menu_items(), next_url=next_url)
+    return flask.render_template('restore.html', menu_items=get_menu_items(), restore_next=next_url)
 
 
 def _load_dictionary():
@@ -943,9 +943,14 @@ def _sync_rev(session_dir):
 def _inject_sync_rev():
     session_dir = flask.session.get('file_name')
     rev = None
-    if session_dir and os.path.exists(os.path.join(session_dir, DICTIONARY_FILE_NAME)):
+    has_copy = session_dir and os.path.exists(os.path.join(session_dir, DICTIONARY_FILE_NAME))
+    if has_copy:
         rev = _sync_rev(session_dir)
-    return {'sync_rev': rev}
+    # Any page can restore the browser's copy (see base.html), except answers to a POST and /sync's
+    # own pages, where reloading would lose what's being shown (a Drive error)
+    needs_restore = bool(session_dir and not has_copy and flask.request.method == 'GET'
+                         and flask.request.endpoint != 'sync_with_drive')
+    return {'sync_rev': rev, 'needs_restore': needs_restore}
 
 
 @app.route('/api/snapshot')
