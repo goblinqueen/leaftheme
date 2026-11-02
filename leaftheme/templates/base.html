@@ -110,6 +110,32 @@
                 });
             } catch (e) {}
             var sid = {{ session.get('file_name') | tojson }};
+            {% if needs_restore or restore_next %}
+            // The server has no copy of the dictionary (Heroku restarted): put back this browser's
+            // copy from the last sync, then show the page again. On restore.html the page can't
+            // be shown without a dictionary, so with no copy to put back it syncs with Drive.
+            var restoreNext = {{ restore_next | default(none) | tojson }};
+            var giveUp = function () {
+                if (restoreNext) window.location.replace('/sync?next=' + encodeURIComponent(restoreNext));
+            };
+            var backup = null;
+            try {
+                backup = sid && JSON.parse(localStorage.getItem('wt_backup_' + sid) || 'null');
+            } catch (e) {}
+            if (!backup) {
+                giveUp();
+                return;
+            }
+            fetch('/api/restore', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(backup)
+            }).then(function (r) { return r.json(); }).then(function (d) {
+                if (d.ok) window.location.replace(restoreNext || window.location.href);
+                else giveUp();
+            }).catch(giveUp);
+            return;
+            {% endif %}
             var rev = {{ sync_rev | tojson }};
             if (!sid || !rev) return;
             var key = 'wt_backup_' + sid;
