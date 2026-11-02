@@ -17,7 +17,6 @@ from glosbe import GlosbeTranslator
 
 _glosbe_fi_ru = GlosbeTranslator(lang_from='fi', lang_to='ru', delay=0)
 _glosbe_ru_fi = GlosbeTranslator(lang_from='ru', lang_to='fi', delay=0)
-_glosbe = _glosbe_fi_ru  # default, used by word_glosbe
 
 
 def _pick_glosbe(word):
@@ -285,46 +284,10 @@ def get_word(word_id):
 
 
 def _render_word(wt_dict, word, redirect_to, error=None):
-    theme = wt_dict.themes[word.theme] if word.theme is not None else None
-    lt_data = _load_leaftheme()
-    reviews = [(label, _srs_view(lt_data.get(key, {}).get(word.uid)))
-               for label, key in (('Fi → Ru', 'forward_srs'), ('Ru → Fi', 'reverse_srs'))]
     return flask.render_template('word.html',
-                                 menu_items=get_menu_items(), word=word, theme=theme,
+                                 menu_items=get_menu_items(), word=word,
                                  all_themes=wt_dict.themes.values(),
-                                 in_review=theme is not None and 'heaven' in theme.name.lower(),
-                                 reviews=reviews,
                                  redirect_to=redirect_to, error=error)
-
-
-def _srs_view(entry):
-    """Display values for one leaftheme.json SRS entry (None if the word was never reviewed)."""
-    if not entry or entry.get('dr') is None:
-        return None
-    from datetime import datetime, timezone
-    log = entry.get('log') or []
-    tm = entry.get('tm') or 0
-    return {
-        'ease': (tm / 100) if tm >= 130 else 2.5,
-        'reviews': len(log) if log else entry.get('ca'),
-        'interval': entry.get('di') or 0,
-        'next': entry['dr'],
-        'due': datetime.now(timezone.utc) >= dictionary._parse_iso(entry['dr']),
-        'last': log[-1]['dt'] if log else None,
-        'fails': entry.get('cf', 0),
-    }
-
-
-@app.route('/word/<int:word_id>/glosbe')
-def word_glosbe(word_id):
-    wt_dict, file_name = _load_dictionary()
-    if wt_dict is None:
-        return flask.jsonify(error='no dictionary'), 400
-    word = wt_dict.words.get(word_id)
-    if word is None:
-        return flask.jsonify(error='not found'), 404
-    translation = _glosbe.translate(word.word)
-    return flask.jsonify(translation=translation)
 
 
 @app.route('/glosbe')

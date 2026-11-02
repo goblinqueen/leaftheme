@@ -14,7 +14,7 @@
     <input type="hidden" name="redirect_to" value="{{ redirect_to }}">
     <div class="mb-2">
         <label class="form-label small text-muted mb-1">Finnish</label>
-        <input type="text" name="word" class="form-control" value="{{ word.word }}">
+        <input type="text" name="word" id="word-input" class="form-control" value="{{ word.word }}">
     </div>
     <div class="mb-2">
         <label class="form-label small text-muted mb-1">Russian</label>
@@ -43,45 +43,6 @@
     <button type="submit" class="btn btn-outline-danger btn-sm">Delete word</button>
 </form>
 
-<h5 class="mt-4">Review</h5>
-{% if not in_review %}
-<p class="text-muted small mb-2">Reviews only include Heaven themes{% if reviews[0][1] or reviews[1][1] %}; the history below is kept for when it gets there{% endif %}.</p>
-{% endif %}
-<div class="row" style="max-width: 640px;">
-    {% for label, srs in reviews %}
-    <div class="col-sm-6">
-        <h6 class="text-muted">{{ label }}</h6>
-        {% if srs %}
-        <dl class="row small">
-            <dt class="col-6 text-muted fw-normal">Next review</dt>
-            <dd class="col-6">
-                {{ srs.next | fmtdate }}
-                {% if srs.due %}<span class="badge bg-warning text-dark ms-1">due</span>{% endif %}
-            </dd>
-            <dt class="col-6 text-muted fw-normal">Interval</dt>
-            <dd class="col-6">{{ srs.interval }} day{% if srs.interval != 1 %}s{% endif %}</dd>
-            <dt class="col-6 text-muted fw-normal">Ease</dt>
-            <dd class="col-6">{{ "%.2f"|format(srs.ease) }}</dd>
-            {% if srs.reviews is not none %}
-            <dt class="col-6 text-muted fw-normal">Reviews</dt>
-            <dd class="col-6">{{ srs.reviews }}</dd>
-            {% endif %}
-            {% if srs.last %}
-            <dt class="col-6 text-muted fw-normal">Last reviewed</dt>
-            <dd class="col-6">{{ srs.last | fmtdate }}</dd>
-            {% endif %}
-            {% if srs.fails %}
-            <dt class="col-6 text-muted fw-normal">Fails in a row</dt>
-            <dd class="col-6">{{ srs.fails }}</dd>
-            {% endif %}
-        </dl>
-        {% else %}
-        <p class="small text-muted">Not reviewed yet.</p>
-        {% endif %}
-    </div>
-    {% endfor %}
-</div>
-
 <dl class="row mt-3" style="max-width: 420px;">
     <dt class="col-5 text-muted fw-normal">Added</dt>
     <dd class="col-7">{{ word.created_date | fmtdate }}</dd>
@@ -101,6 +62,8 @@
 
 <script>
 document.getElementById('btn-glosbe').addEventListener('click', () => {
+    const word = document.getElementById('word-input').value.trim();
+    if (!word) { alert('Enter a Finnish word first.'); return; }
     const btn = document.getElementById('btn-glosbe');
     const label = document.getElementById('glosbe-label');
     const spinner = document.getElementById('glosbe-spinner');
@@ -108,7 +71,7 @@ document.getElementById('btn-glosbe').addEventListener('click', () => {
     label.classList.add('d-none');
     spinner.classList.remove('d-none');
 
-    fetch('/word/{{ word.id }}/glosbe')
+    fetch('/glosbe?word=' + encodeURIComponent(word) + '&dir=fi-ru')
         .then(r => r.json())
         .then(data => {
             if (data.translation) {
